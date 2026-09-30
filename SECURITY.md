@@ -1,50 +1,67 @@
-# Security Policy
+# Security policy
 
-This project configures privileged Linux services. Treat every change as security-sensitive.
+This project configures privileged services on internet-facing servers, so every change is treated as security-sensitive.
 
-## Supported Versions
+## Supported versions
 
-| Version | Status |
+| Version | Supported |
 | --- | --- |
-| `v1.0.0-beta.1` | Beta, security fixes accepted |
-| earlier commits | Not supported as releases |
+| 2.x (latest release) | Yes |
+| 1.0.0 betas | No. They don't verify reachability with tor ≥ 0.4.5 and don't install Debian security updates automatically; upgrade to 2.x. |
 
-## Reporting a Vulnerability
+The script itself requires tor 0.4.9 or newer, the only series the Tor network still accepts.
 
-Please avoid posting sensitive server details in public issues.
+## Reporting a vulnerability
 
-Safe to share publicly:
+Please **do not open a public issue** for a vulnerability.
 
-- distro and codename
-- script version
-- selected relay mode
-- sanitized `torrc` directives
-- error messages with private data removed
+Report it privately through [GitHub's private vulnerability reporting](https://github.com/ljkx/tor-relay-setup/security/advisories/new). Include:
 
-Do not share publicly:
+- the script version (`./setup-tor-guard-relay.sh --version`), distribution and codename
+- the relay mode and the menu path or flags involved
+- what an attacker can do, and the steps to reproduce
 
-- relay identity keys
-- private SSH keys
-- private contact addresses you do not want published
-- VPS control-panel credentials
-- complete logs that may include local operational context
+The maintainer aims to acknowledge reports within a week. Fixes are published as GitHub security advisories that credit the reporter, unless you prefer otherwise.
 
-For urgent security issues, open a GitHub issue with a minimal public summary and mark clearly that details are sensitive. If GitHub private vulnerability reporting is enabled for the repository, use that path.
+Vulnerabilities in **tor itself** belong to the Tor Project: see https://support.torproject.org/misc/bug-or-feedback/.
 
-## Security Boundaries
+### What not to include
+
+Never send relay identity or family keys, SSH keys, provider credentials, or unredacted logs. Sanitised `torrc` directives and error messages are enough. Remember that ContactInfo, nickname, fingerprint and FamilyId are public anyway.
+
+## Verifying what you run
+
+Release assets are built by the tag-triggered [release workflow](.github/workflows/release.yml) and come with:
+
+- `SHA256SUMS`: `sha256sum --check SHA256SUMS`
+- a Sigstore-signed SLSA build-provenance attestation: `gh attestation verify setup-tor-guard-relay.sh -R ljkx/tor-relay-setup`
+
+Read the script before running it as root, and run `--dry-run` first.
+
+## Security design
 
 The script is designed to:
 
-- configure Tor from official Tor Project apt packages
-- back up important files before replacement
-- verify generated `torrc` candidates before installing them
-- avoid telemetry and secret collection
-- keep cleanup limited to traces of this tool
+- install tor only from `deb.torproject.org`. The signing key is pinned by fingerprint and must be the only key in the downloaded file, and the apt candidate must come from the Tor repository and be ≥ 0.4.9.
+- show every privileged change, and the complete `torrc`, before applying anything
+- validate every `torrc` candidate with `tor --verify-config` (using Debian's service defaults) before it replaces the live file
+- back up every file it replaces, and never overwrite relay identity or family keys
+- install family keys `0600`, owned by `debian-tor`
+- keep SSH reachable: detected SSH ports are allowed before UFW is enabled
+- bind MetricsPort to localhost only, with a localhost-only policy
+- collect no telemetry. It contacts only apt mirrors, `deb.torproject.org`, Onionoo (on request), and the directory authorities (optional IPv6 ping).
 
-The script is not designed to:
+It is **not** designed to:
 
-- harden an already compromised server
-- replace provider firewall configuration
-- provide legal advice for exit relay operation
-- manage Tor bridge relays
-- erase Tor relay identity or decommission a relay automatically
+- harden a server that is already compromised, or replace general OS hardening
+- manage provider or cloud firewalls
+- give legal advice for running an exit relay
+- set up bridges or onion services
+- decommission a relay or delete its keys automatically
+
+The development pipeline:
+
+- pins every GitHub Action by commit SHA and runs workflows with least-privilege tokens
+- audits workflows with zizmor
+- installs lint and test tools from checksum-verified pinned releases
+- runs weekly, so changes to the Tor repository or its key surface quickly

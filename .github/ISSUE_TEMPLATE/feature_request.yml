@@ -7,31 +7,33 @@ body:
     id: problem
     attributes:
       label: Operator problem
-      description: What real relay-operator task would this improve?
+      description: Which real relay-operator task would this improve?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed behavior
-      description: Describe the interaction, defaults, and safety guardrails you expect.
+      label: Proposed behaviour
+      description: The interaction, defaults, and safety guardrails you expect. How should it look in the review screen and in `--dry-run`?
     validations:
       required: true
   - type: textarea
     id: docs
     attributes:
-      label: Official Tor documentation
-      description: Link official Tor Project docs if the feature changes relay behavior.
+      label: Tor Project documentation
+      description: Link the official docs (or tor source) that back any change to relay behaviour.
   - type: dropdown
     id: risk
     attributes:
-      label: Risk area
+      label: Area
       options:
         - torrc generation
-        - exit relay behavior
+        - relay families (FamilyId / MyFamily)
+        - exit relay behaviour
         - firewall / SSH access
-        - package management
-        - MyFamily
+        - package management / apt repository
+        - monitoring (MetricsPort, Nyx)
         - cleanup
+        - CI / tooling / releases
         - UI / docs only
         - other

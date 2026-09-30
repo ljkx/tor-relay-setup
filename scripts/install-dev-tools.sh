@@ -11,6 +11,9 @@ SHFMT_VERSION="v3.14.1"
 SHFMT_SHA256="76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
 BATS_VERSION="v1.14.0"
 BATS_COMMIT="eb7f42f8d608ac693d7a4b67474f6714ea68cfc5"
+# fzf is only needed to record the README demo (docs/demo/setup.tape).
+FZF_VERSION="v0.74.4"
+FZF_SHA256="05e6813a337cc722c3ed07e54a764b75cc5d671e2e60459db0ba696ee5fa7504"
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 TOOLS_DIR="${TOOLS_DIR:-${ROOT_DIR}/.tools}"
@@ -71,6 +74,15 @@ if ! have_version bats "$BATS_VERSION"; then
   ln -sfn ../bats-core/bin/bats "${BIN_DIR}/bats"
 fi
 
+if ! have_version fzf "$FZF_VERSION"; then
+  archive="${work_dir}/fzf.tar.gz"
+  download "https://github.com/junegunn/fzf/releases/download/${FZF_VERSION}/fzf-${FZF_VERSION#v}-linux_amd64.tar.gz" \
+    "$archive" "$FZF_SHA256"
+  tar -xzf "$archive" -C "$work_dir" fzf
+  install -m 0755 "${work_dir}/fzf" "${BIN_DIR}/fzf"
+fi
+
 "${BIN_DIR}/shellcheck" --version | sed -n '2p'
 printf 'shfmt %s\n' "$("${BIN_DIR}/shfmt" --version)"
 "${BIN_DIR}/bats" --version
+printf 'fzf %s\n' "$("${BIN_DIR}/fzf" --version)"

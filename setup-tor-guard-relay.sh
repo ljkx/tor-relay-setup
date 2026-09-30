@@ -11,7 +11,7 @@ case "$SCRIPT_NAME" in
     SCRIPT_NAME="setup-tor-guard-relay.sh"
     ;;
 esac
-VERSION="1.0.0-beta.4"
+VERSION="2.0.0-beta.1"
 DRY_RUN=0
 CLEANUP_MODE=0
 USE_FZF=0
@@ -102,6 +102,9 @@ RESOLV_CONF_PATH="/etc/resolv.conf"
 ONIONOO_BASE_URL="https://onionoo.torproject.org"
 STATE_DIR="/var/lib/tor-relay-setup"
 STATE_FILE="${STATE_DIR}/install-state"
+# fzf palette: -1 keeps the terminal's own foreground/background so panels
+# blend into any theme; accents use the 256-colour palette.
+FZF_COLORS="fg:-1,bg:-1,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110"
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   BOLD=$'\033[1m'
@@ -530,7 +533,8 @@ show_file_panel() {
 
   if tui_available; then
     display_file=$(mktemp_in_workspace)
-    nl -ba -w4 -s '  ' "$file" > "$display_file"
+    # Drop leading blank lines, then number the rest.
+    sed '/./,$!d' "$file" | nl -ba -w4 -s '  ' > "$display_file"
     # --ansi renders the bold/colour codes the review summary contains.
     env FZF_DEFAULT_OPTS= fzf \
       --ansi \
@@ -544,7 +548,7 @@ show_file_panel() {
       --pointer=">" \
       --header="${title} | Scroll with arrows/PageUp/PageDown. Enter, q, or Esc returns." \
       --bind=enter:accept,q:abort \
-      --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110" \
+      --color="$FZF_COLORS" \
       < "$display_file" > /dev/null || true
     rm -f -- "$display_file"
   else
@@ -587,7 +591,7 @@ show_live_log_panel() {
     --preview="$preview_command" \
     --preview-window=down:82%:wrap:follow \
     --bind=enter:accept,q:abort \
-    --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110" \
+    --color="$FZF_COLORS" \
     < "$input_file" > /dev/null || true
   rm -f -- "$input_file"
 }
@@ -875,7 +879,7 @@ choose_with_fzf() {
     --prompt="$prompt_label"
     --pointer=">"
     --marker="*"
-    --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110"
+    --color="$FZF_COLORS"
     --preview='printf "%s\n\n%s\n\n%s\n" {2} {3} {4}'
     --preview-window=down:6:wrap
   )
@@ -949,7 +953,7 @@ prompt_line_fzf() {
     --with-nth=2,3
     --prompt="${prompt}> "
     --pointer=">"
-    --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110"
+    --color="$FZF_COLORS"
     --print-query
     --query="$default_value"
     --phony
@@ -3167,6 +3171,8 @@ install_family_key() {
   target="${keys_dir}/${name}.secret_family_key"
   id_file="${TMP_DIR}/${name}.public_family_id"
   user=$(tor_run_user)
+  # A dry run before tor is installed has no debian-tor user yet.
+  ((DRY_RUN)) && [[ "$user" == "root" ]] && user="debian-tor"
   # Only root can hand files to the Tor user (tests run unprivileged).
   ((EUID == 0 || DRY_RUN)) && owner=(-o "$user" -g "$user")
 
@@ -3201,7 +3207,7 @@ generate_family_key() {
   if ((DRY_RUN)); then
     info "Would generate a new family key named ${name}"
     print_command tor --keygen-family "$name"
-    install_family_key /dev/null "$name" "$FAMILY_ID"
+    install_family_key "${name}.secret_family_key" "$name" "$FAMILY_ID"
     return 0
   fi
 
@@ -4075,7 +4081,7 @@ command_logs_menu() {
       --header="Select a command log. Enter opens it; Esc returns." \
       --preview='sed -n "1,240p" {1}' \
       --preview-window=down:70%:wrap \
-      --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110" \
+      --color="$FZF_COLORS" \
       < "$list_file" > "$output_file"; then
       mapfile -t fzf_lines < "$output_file"
       choice=${fzf_lines[0]%%$'\t'*}
@@ -4939,6 +4945,8 @@ verify_tor_config_file() {
     else
       run_cmd "Verifying Tor configuration" tor -f "$config_file" --verify-config
     fi
+  elif ((DRY_RUN)); then
+    info "Would verify the torrc with tor --verify-config once tor is installed."
   else
     warn "tor command not found yet; cannot verify torrc syntax."
   fi
