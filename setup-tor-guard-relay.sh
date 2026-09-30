@@ -7,7 +7,7 @@ fi
 
 SCRIPT_NAME="${0##*/}"
 case "$SCRIPT_NAME" in
-  bash|sh|dash|bash.exe|sh.exe|dash.exe)
+  bash | sh | dash | bash.exe | sh.exe | dash.exe)
     SCRIPT_NAME="setup-tor-guard-relay.sh"
     ;;
 esac
@@ -114,7 +114,7 @@ fi
 cleanup() {
   if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR:-}" ]]; then
     case "$TMP_DIR" in
-      /tmp/*|/var/tmp/*)
+      /tmp/* | /var/tmp/*)
         rm -rf -- "$TMP_DIR"
         ;;
       *)
@@ -144,7 +144,7 @@ install_traps() {
 }
 
 print_help() {
-  cat <<EOF
+  cat << EOF
 ${SCRIPT_NAME} ${VERSION}
 
 Interactively configure a Tor relay on a fresh Debian or Ubuntu VPS.
@@ -185,10 +185,10 @@ parse_args() {
       --uninstall)
         CLEANUP_MODE=1
         ;;
-      --plain|--no-tui)
+      --plain | --no-tui)
         PLAIN_TUI=1
         ;;
-      --help|-h)
+      --help | -h)
         print_help
         exit 0
         ;;
@@ -255,7 +255,7 @@ die() {
 }
 
 command_exists() {
-  command -v "$1" >/dev/null 2>&1
+  command -v "$1" > /dev/null 2>&1
 }
 
 acquire_run_lock() {
@@ -268,7 +268,7 @@ acquire_run_lock() {
 
   for lock_path in /run/lock/tor-relay-setup.lock /tmp/tor-relay-setup.lock; do
     RUN_LOCK_PATH=$lock_path
-    if { exec 9>"$RUN_LOCK_PATH"; } 2>/dev/null; then
+    if { exec 9> "$RUN_LOCK_PATH"; } 2> /dev/null; then
       if ! flock -n 9; then
         die "Another ${SCRIPT_NAME} run appears to be active (${RUN_LOCK_PATH})."
       fi
@@ -320,12 +320,12 @@ bootstrap_tui() {
 }
 
 python_command() {
-  if command_exists python3 && python3 -c 'import json, sys' >/dev/null 2>&1; then
+  if command_exists python3 && python3 -c 'import json, sys' > /dev/null 2>&1; then
     printf 'python3'
     return 0
   fi
 
-  if command_exists python && python -c 'import json, sys' >/dev/null 2>&1; then
+  if command_exists python && python -c 'import json, sys' > /dev/null 2>&1; then
     printf 'python'
     return 0
   fi
@@ -338,19 +338,19 @@ apt_package_available() {
   local candidate
 
   command_exists apt-cache || return 1
-  candidate=$(apt-cache policy "$package" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')
+  candidate=$(apt-cache policy "$package" 2> /dev/null | awk '/Candidate:/ { print $2; exit }')
   [[ -n "$candidate" && "$candidate" != "(none)" ]]
 }
 
 apt_package_installed() {
   local package=$1
   command_exists dpkg-query || return 1
-  dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'
+  dpkg-query -W -f='${Status}' "$package" 2> /dev/null | grep -Fq 'install ok installed'
 }
 
 tor_candidate_from_tor_project() {
   command_exists apt-cache || return 1
-  apt-cache policy tor 2>/dev/null | awk '
+  apt-cache policy tor 2> /dev/null | awk '
     $1 == "Candidate:" {
       candidate = $2
       next
@@ -387,7 +387,7 @@ verify_tor_signing_key_file() {
 
   # Print every primary-key fingerprint. Exactly one is allowed, so a key file
   # with an extra injected key cannot slip into the apt keyring.
-  fingerprint=$(gpg --show-keys --with-colons --fingerprint "$key_file" 2>/dev/null \
+  fingerprint=$(gpg --show-keys --with-colons --fingerprint "$key_file" 2> /dev/null \
     | awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print toupper($10); want = 0 }' \
     | paste -sd ' ' -)
 
@@ -414,7 +414,7 @@ check_tor_project_suite() {
   fi
 
   if command_exists curl; then
-    status=$(curl -L -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 "$url" 2>/dev/null || true)
+    status=$(curl -L -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 "$url" 2> /dev/null || true)
     status=${status:-000}
     case "$status" in
       200)
@@ -530,7 +530,7 @@ show_file_panel() {
       --header="${title} | Scroll with arrows/PageUp/PageDown. Enter, q, or Esc returns." \
       --bind=enter:accept,q:abort \
       --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110" \
-      < "$display_file" >/dev/null || true
+      < "$display_file" > /dev/null || true
     rm -f -- "$display_file"
   else
     printf '\n%s\n' "$title"
@@ -551,7 +551,7 @@ show_live_log_panel() {
   input_file=$(mktemp_in_workspace)
   printf 'output\t%s\t%s\n' "$title" "Command output streams in the preview pane." > "$input_file"
   quoted_file=$(shell_quote "$file")
-  if tail --help 2>/dev/null | grep -Fq -- '--pid'; then
+  if tail --help 2> /dev/null | grep -Fq -- '--pid'; then
     preview_command="tail --pid=${pid} -n +1 -f ${quoted_file}"
   else
     preview_command="tail -n +1 -f ${quoted_file}"
@@ -573,7 +573,7 @@ show_live_log_panel() {
     --preview-window=down:82%:wrap:follow \
     --bind=enter:accept,q:abort \
     --color="fg:252,bg:232,hl:81,fg+:255,bg+:24,hl+:51,prompt:43,pointer:43,marker:154,info:141,border:66,header:110" \
-    < "$input_file" >/dev/null || true
+    < "$input_file" > /dev/null || true
   rm -f -- "$input_file"
 }
 
@@ -602,7 +602,7 @@ run_tui_command() {
   pid=$!
 
   show_live_log_panel "$description" "$log_file" "$pid"
-  if kill -0 "$pid" 2>/dev/null; then
+  if kill -0 "$pid" 2> /dev/null; then
     info "Waiting for '${description}' to finish. Output is still being written to ${log_file}."
   fi
 
@@ -688,10 +688,10 @@ follow_command_panel() {
   "$@" >> "$log_file" 2>&1 &
   pid=$!
   show_live_log_panel "$title" "$log_file" "$pid"
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
+  if kill -0 "$pid" 2> /dev/null; then
+    kill "$pid" 2> /dev/null || true
   fi
-  wait "$pid" 2>/dev/null || true
+  wait "$pid" 2> /dev/null || true
 }
 
 install_fzf_for_current_run() {
@@ -774,7 +774,7 @@ read_reply() {
   local variable_name=$1
 
   if [[ -t 0 && -e /dev/tty && -r /dev/tty && -w /dev/tty ]]; then
-    if IFS= read -r "${variable_name?}" < /dev/tty 2>/dev/null; then
+    if IFS= read -r "${variable_name?}" < /dev/tty 2> /dev/null; then
       return 0
     fi
   fi
@@ -827,8 +827,8 @@ ask_yes_no() {
     fi
 
     case "$reply" in
-      y|yes) return 0 ;;
-      n|no) return 1 ;;
+      y | yes) return 0 ;;
+      n | no) return 1 ;;
       *) warn "Please answer yes or no." ;;
     esac
   done
@@ -899,10 +899,16 @@ menu_cancel_choice() {
     key=${options[i]}
     label=${options[i + 1]}
     case "$key" in
-      q|x) printf '%s' "$key"; return 0 ;;
+      q | x)
+        printf '%s' "$key"
+        return 0
+        ;;
     esac
     case "${label,,}" in
-      back|exit|cancel) printf '%s' "$key"; return 0 ;;
+      back | exit | cancel)
+        printf '%s' "$key"
+        return 0
+        ;;
     esac
   done
 
@@ -1259,7 +1265,7 @@ valid_ipv6_address() {
   [[ "$value" != */* ]] || return 1
 
   if python_bin=$(python_command); then
-    "$python_bin" - "$value" <<'PY'
+    "$python_bin" - "$value" << 'PY'
 import ipaddress
 import sys
 
@@ -1303,7 +1309,7 @@ require_supported_system() {
   fi
 
   case "$OS_ID" in
-    debian|ubuntu) ;;
+    debian | ubuntu) ;;
     *)
       die "Unsupported OS: ${OS_PRETTY_NAME}. This installer currently supports Debian and Ubuntu releases with a Tor Project apt repository suite."
       ;;
@@ -1317,7 +1323,7 @@ require_supported_system() {
 
   ARCHITECTURE=$(dpkg --print-architecture)
   case "$ARCHITECTURE" in
-    amd64|arm64) ;;
+    amd64 | arm64) ;;
     *)
       die "Unsupported CPU architecture '${ARCHITECTURE}'. The Tor Project apt repository currently offers amd64 and arm64 packages."
       ;;
@@ -1342,7 +1348,7 @@ detect_firewall() {
   if command_exists ufw; then
     FIREWALL_KIND="ufw"
     local ufw_status=""
-    ufw_status=$(ufw status 2>/dev/null | head -n 1 || true)
+    ufw_status=$(ufw status 2> /dev/null | head -n 1 || true)
     case "${ufw_status,,}" in
       *inactive*) FIREWALL_STATE="inactive" ;;
       *active*) FIREWALL_STATE="active" ;;
@@ -1353,7 +1359,7 @@ detect_firewall() {
 
   if command_exists firewall-cmd; then
     FIREWALL_KIND="firewalld"
-    if systemctl is-active --quiet firewalld 2>/dev/null; then
+    if systemctl is-active --quiet firewalld 2> /dev/null; then
       FIREWALL_STATE="active"
     else
       FIREWALL_STATE="inactive"
@@ -1362,7 +1368,7 @@ detect_firewall() {
   fi
 
   if command_exists nft; then
-    if nft list chain inet filter input >/dev/null 2>&1; then
+    if nft list chain inet filter input > /dev/null 2>&1; then
       FIREWALL_KIND="nftables"
       FIREWALL_STATE="inet filter input chain found"
     else
@@ -1382,7 +1388,7 @@ detect_ssh_port() {
     while IFS= read -r candidate; do
       [[ "$candidate" =~ ^[0-9]+$ ]] || continue
       ports+=("$candidate")
-    done < <(sshd -T 2>/dev/null | awk 'tolower($1) == "port" { print $2 }' || true)
+    done < <(sshd -T 2> /dev/null | awk 'tolower($1) == "port" { print $2 }' || true)
   fi
 
   if [[ -n "${SSH_CONNECTION:-}" ]]; then
@@ -1444,7 +1450,7 @@ collect_firewall_options() {
         ENABLE_UFW_AFTER_RULES=1
       fi
       ;;
-    ufw:inactive|ufw:installed)
+    ufw:inactive | ufw:installed)
       if ask_yes_no "Allow SSH and TCP ${OR_PORT}, then enable UFW?" "yes"; then
         ENABLE_FIREWALL=1
         ENABLE_UFW_AFTER_RULES=1
@@ -1476,10 +1482,10 @@ collect_system_hostname() {
   section "System Hostname"
 
   if command_exists hostnamectl; then
-    CURRENT_HOSTNAME=$(hostnamectl --static 2>/dev/null || true)
+    CURRENT_HOSTNAME=$(hostnamectl --static 2> /dev/null || true)
   fi
   if [[ -z "$CURRENT_HOSTNAME" ]] && command_exists hostname; then
-    CURRENT_HOSTNAME=$(hostname 2>/dev/null || true)
+    CURRENT_HOSTNAME=$(hostname 2> /dev/null || true)
   fi
   CURRENT_HOSTNAME=${CURRENT_HOSTNAME:-unknown}
 
@@ -1530,7 +1536,7 @@ list_ipv6_candidates() {
     return 0
   fi
 
-  ip -6 addr show scope global 2>/dev/null \
+  ip -6 addr show scope global 2> /dev/null \
     | awk '/inet6/ { sub(/\/.*/, "", $2); print $2 }' \
     | grep -v '^fe80:' || true
 }
@@ -1560,7 +1566,7 @@ check_ipv6_connectivity() {
 
   printf '%s\n' "Tor-documented check: ping each Tor directory authority IPv6 address from this server."
   for address in "${authorities[@]}"; do
-    if "${ping_cmd[@]}" "$address" >/dev/null 2>&1; then
+    if "${ping_cmd[@]}" "$address" > /dev/null 2>&1; then
       success "IPv6 ping succeeded: ${address}"
     else
       warn "IPv6 ping failed: ${address}"
@@ -1734,12 +1740,12 @@ collect_initial_myfamily() {
 
 available_kib_for_path() {
   local path=$1
-  df -Pk "$path" 2>/dev/null | awk 'NR == 2 { print $4 }'
+  df -Pk "$path" 2> /dev/null | awk 'NR == 2 { print $4 }'
 }
 
 available_inodes_for_path() {
   local path=$1
-  df -Pi "$path" 2>/dev/null | awk 'NR == 2 { print $4 }'
+  df -Pi "$path" 2> /dev/null | awk 'NR == 2 { print $4 }'
 }
 
 check_path_capacity() {
@@ -1868,7 +1874,7 @@ calculate_steady_monthly_limits() {
     sum)
       per_direction_gbytes=$((10#$MONTHLY_TRAFFIC_USABLE_GBYTES / 2))
       ;;
-    out|max)
+    out | max)
       per_direction_gbytes=$((10#$MONTHLY_TRAFFIC_USABLE_GBYTES))
       ;;
     *)
@@ -2229,7 +2235,7 @@ torrc_exists() {
 }
 
 tor_service_active() {
-  command_exists systemctl && systemctl is-active --quiet "$TOR_SERVICE" 2>/dev/null
+  command_exists systemctl && systemctl is-active --quiet "$TOR_SERVICE" 2> /dev/null
 }
 
 existing_tor_relay_detected() {
@@ -2374,7 +2380,7 @@ lookup_relay_candidates() {
   info "Looking up '${query}' with Tor Metrics Onionoo."
   fetch_url_to_file "$url" "$json_file"
 
-  "$python_bin" - "$json_file" "$query" > "$output" <<'PY'
+  "$python_bin" - "$json_file" "$query" > "$output" << 'PY'
 import json
 import sys
 
@@ -2412,7 +2418,7 @@ select_relay_fingerprint() {
   local running
   local addresses
 
-SELECTED_RELAY_FINGERPRINTS=()
+  SELECTED_RELAY_FINGERPRINTS=()
 
   if [[ "$query" =~ ^(.+)[[:space:]]+#?([0-9]+)$ ]]; then
     query=$(trim "${BASH_REMATCH[1]}")
@@ -2525,13 +2531,17 @@ lookup_family_status() {
     return 0
   }
 
-  lookup=$(IFS=,; printf '%s' "${fingerprints[*]}")
+  lookup=$(
+    IFS=,
+    printf '%s' "${fingerprints[*]}"
+  )
   fetch_url_to_file "${ONIONOO_BASE_URL}/summary?type=relay&lookup=${lookup}" "$json_file" || {
     warn "Could not fetch Onionoo family status."
     return 0
   }
 
-  count=$("$python_bin" - "$json_file" <<'PY'
+  count=$(
+    "$python_bin" - "$json_file" << 'PY'
 import json
 import sys
 
@@ -2545,7 +2555,7 @@ for relay in document.get("relays", []):
     addresses = ",".join(relay.get("a", [])[:2])
     print(f"{nickname}\t{fingerprint}\trunning:{running}\t{addresses}")
 PY
-)
+  )
 
   if [[ -z "$count" ]]; then
     warn "Onionoo did not return status for the configured MyFamily fingerprints yet."
@@ -3097,7 +3107,7 @@ configure_common_torrc_menu() {
         write_torrc_set_directive "$candidate" SocksPort "SocksPort 0"
         apply_existing_torrc_change "$candidate" "SOCKS listener change"
         ;;
-      6|"")
+      6 | "")
         return 0
         ;;
     esac
@@ -3132,7 +3142,7 @@ show_relay_directory_status() {
     return 0
   }
 
-  "$python_bin" - "$json_file" >> "$report_file" <<'PY'
+  "$python_bin" - "$json_file" >> "$report_file" << 'PY'
 import json
 import sys
 
@@ -3213,7 +3223,7 @@ service_control_menu() {
           run_cmd "Disabling ${TOR_SERVICE}" systemctl disable "$TOR_SERVICE"
         fi
         ;;
-      7|"")
+      7 | "")
         return 0
         ;;
     esac
@@ -3249,7 +3259,7 @@ logs_menu() {
       3)
         check_tor_orport_self_test "1 hour ago" 0
         ;;
-      4|"")
+      4 | "")
         return 0
         ;;
     esac
@@ -3376,7 +3386,7 @@ backups_menu() {
           fi
         fi
         ;;
-      5|"")
+      5 | "")
         return 0
         ;;
     esac
@@ -3434,7 +3444,7 @@ package_tools_menu() {
           success "fzf is installed; not marking it as script-installed because it was already present."
         fi
         ;;
-      6|"")
+      6 | "")
         return 0
         ;;
     esac
@@ -3451,7 +3461,7 @@ command_logs_menu() {
   section "Command Logs"
   ensure_command_log_dir
 
-  if ! find "$COMMAND_LOG_DIR" -type f -name '*.log' -print -quit 2>/dev/null | grep -q .; then
+  if ! find "$COMMAND_LOG_DIR" -type f -name '*.log' -print -quit 2> /dev/null | grep -q .; then
     warn "No command logs are available in this run yet."
     return 0
   fi
@@ -3461,7 +3471,7 @@ command_logs_menu() {
     output_file=$(mktemp_in_workspace)
     while IFS= read -r log_file; do
       printf '%s\t%s\t%s\n' "$log_file" "$(basename "$log_file")" "Command output captured during this run" >> "$list_file"
-    done < <(find "$COMMAND_LOG_DIR" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{ $1=""; sub(/^ /, ""); print }')
+    done < <(find "$COMMAND_LOG_DIR" -type f -name '*.log' -printf '%T@ %p\n' 2> /dev/null | sort -nr | awk '{ $1=""; sub(/^ /, ""); print }')
 
     if env FZF_DEFAULT_OPTS= fzf \
       --height=90% \
@@ -3492,14 +3502,14 @@ command_logs_menu() {
 script_realpath() {
   local source_path=${BASH_SOURCE[0]:-$0}
   case "$source_path" in
-    bash|sh|dash|bash.exe|sh.exe|dash.exe|-bash|-sh)
+    bash | sh | dash | bash.exe | sh.exe | dash.exe | -bash | -sh)
       return 1
       ;;
   esac
 
   [[ -e "$source_path" ]] || return 1
   if command_exists readlink; then
-    readlink -f "$source_path" 2>/dev/null && return 0
+    readlink -f "$source_path" 2> /dev/null && return 0
   fi
 
   (cd "$(dirname "$source_path")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$source_path")")
@@ -3510,25 +3520,25 @@ script_repo_root() {
   local dir
   dir=$(dirname "$path")
   command_exists git || return 1
-  git -C "$dir" rev-parse --show-toplevel 2>/dev/null
+  git -C "$dir" rev-parse --show-toplevel 2> /dev/null
 }
 
 repo_looks_like_this_project() {
   local repo_root=$1
   [[ -d "$repo_root/.git" ]] || return 1
-  git -C "$repo_root" remote -v 2>/dev/null | grep -Eq 'github\.com[:/]ljkx/tor-relay-setup(\.git)?'
+  git -C "$repo_root" remote -v 2> /dev/null | grep -Eq 'github\.com[:/]ljkx/tor-relay-setup(\.git)?'
 }
 
 repo_clean_for_deletion() {
   local repo_root=$1
-  [[ -z "$(git -C "$repo_root" status --porcelain 2>/dev/null)" ]]
+  [[ -z "$(git -C "$repo_root" status --porcelain 2> /dev/null)" ]]
 }
 
 safe_remove_script_path() {
   local target=$1
   [[ -n "$target" && -e "$target" ]] || return 0
   case "$target" in
-    /|/root|/home|/etc|/usr|/var|/tmp)
+    / | /root | /home | /etc | /usr | /var | /tmp)
       die "Refusing to remove unsafe path: ${target}"
       ;;
   esac
@@ -3546,7 +3556,7 @@ remove_tmp_operator_reports() {
   local report
   for report in /tmp/tor-relay-report.*.txt; do
     [[ -e "$report" ]] || continue
-    if ! head -n 1 "$report" 2>/dev/null | grep -Fxq "Tor Relay Operator Report"; then
+    if ! head -n 1 "$report" 2> /dev/null | grep -Fxq "Tor Relay Operator Report"; then
       warn "Skipping ${report}; it does not have this tool's report header."
       continue
     fi
@@ -3683,9 +3693,9 @@ operator_report() {
     printf 'Fingerprint: %s\n' "${local_fp:-unavailable}"
     printf 'ORPort: %s\n' "${current_orport:-unavailable}"
     printf '\nTor version:\n'
-    tor --version 2>/dev/null || true
+    tor --version 2> /dev/null || true
     printf '\nService status:\n'
-    systemctl is-active "$TOR_SERVICE" 2>/dev/null || true
+    systemctl is-active "$TOR_SERVICE" 2> /dev/null || true
     printf '\nConfigured relay directives:\n'
     if torrc_exists; then
       awk '
@@ -3697,7 +3707,7 @@ operator_report() {
       ' "$TORRC_PATH"
     fi
     printf '\nRecent Tor warnings/errors:\n'
-    journalctl -u "$TOR_SERVICE" -n 120 --no-pager 2>/dev/null | grep -Ei 'warn|error|failed|reachable' || true
+    journalctl -u "$TOR_SERVICE" -n 120 --no-pager 2> /dev/null | grep -Ei 'warn|error|failed|reachable' || true
   } > "$report"
 
   success "Wrote ${report}"
@@ -3796,7 +3806,7 @@ repair_menu() {
           configure_firewall
         fi
         ;;
-      6|"")
+      6 | "")
         return 0
         ;;
     esac
@@ -3867,7 +3877,7 @@ existing_relay_menu() {
       r)
         return 1
         ;;
-      x|"")
+      x | "")
         exit 0
         ;;
     esac
@@ -4099,11 +4109,11 @@ configure_exit_dns() {
 
   build_resolv_conf "$resolv_file"
 
-  if command_exists lsattr && lsattr -d "$RESOLV_CONF_PATH" 2>/dev/null | awk '{ print $1 }' | grep -q 'i'; then
+  if command_exists lsattr && lsattr -d "$RESOLV_CONF_PATH" 2> /dev/null | awk '{ print $1 }' | grep -q 'i'; then
     die "${RESOLV_CONF_PATH} is immutable. Unlock it first with: chattr -i ${RESOLV_CONF_PATH}"
   fi
 
-  if [[ -L "$RESOLV_CONF_PATH" ]] && command_exists systemctl && systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+  if [[ -L "$RESOLV_CONF_PATH" ]] && command_exists systemctl && systemctl is-active --quiet systemd-resolved 2> /dev/null; then
     warn "${RESOLV_CONF_PATH} is managed through a symlink while systemd-resolved is active."
     warn "This script will replace it only because exit relay DNS needs a local caching resolver."
   fi
@@ -4129,11 +4139,11 @@ configure_exit_dns() {
   resolv_backup=$LAST_BACKUP_PATH
   success "Configured ${RESOLV_CONF_PATH} to use local Unbound."
 
-  if getent hosts deb.torproject.org >/dev/null 2>&1; then
+  if getent hosts deb.torproject.org > /dev/null 2>&1; then
     success "DNS resolution works through local resolver."
   else
     warn "DNS resolution failed after switching to local Unbound."
-    if [[ -n "$resolv_backup" && ( -e "$resolv_backup" || -L "$resolv_backup" ) ]]; then
+    if [[ -n "$resolv_backup" && (-e "$resolv_backup" || -L "$resolv_backup") ]]; then
       rm -f -- "$RESOLV_CONF_PATH"
       cp -a -- "$resolv_backup" "$RESOLV_CONF_PATH"
       warn "Restored ${RESOLV_CONF_PATH} from ${resolv_backup}."
@@ -4184,7 +4194,7 @@ configure_hostname() {
 }
 
 nft_rule_exists() {
-  nft list chain inet filter input 2>/dev/null | grep -Fq "Tor relay ORPort ${OR_PORT}"
+  nft list chain inet filter input 2> /dev/null | grep -Fq "Tor relay ORPort ${OR_PORT}"
 }
 
 configure_ufw_firewall() {
@@ -4227,7 +4237,7 @@ configure_firewall() {
       run_cmd "Reloading firewalld" firewall-cmd --reload
       ;;
     nftables)
-      if ! nft list chain inet filter input >/dev/null 2>&1; then
+      if ! nft list chain inet filter input > /dev/null 2>&1; then
         warn "nftables chain inet filter input is not available. Skipping firewall change."
         return 0
       fi
@@ -4313,7 +4323,7 @@ check_tor_orport_self_test() {
   deadline=$((SECONDS + wait_seconds))
 
   while true; do
-    log_output=$(journalctl -u "$TOR_SERVICE" --since "$since_time" --no-pager 2>/dev/null || true)
+    log_output=$(journalctl -u "$TOR_SERVICE" --since "$since_time" --no-pager 2> /dev/null || true)
 
     if orport_self_test_succeeded <<< "$log_output"; then
       success "Tor reports the ORPort is reachable from outside."

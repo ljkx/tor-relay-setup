@@ -38,7 +38,7 @@ download() {
 have_version() {
   local binary=$1
   local version=$2
-  [[ -x "${BIN_DIR}/${binary}" ]] && "${BIN_DIR}/${binary}" --version 2>/dev/null | grep -Fq -- "${version#v}"
+  [[ -x "${BIN_DIR}/${binary}" ]] && "${BIN_DIR}/${binary}" --version 2> /dev/null | grep -Fq -- "${version#v}"
 }
 
 mkdir -p "$BIN_DIR"
