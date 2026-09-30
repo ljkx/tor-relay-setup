@@ -75,7 +75,19 @@ INSTALL_UFW=0
 ENABLE_UFW_AFTER_RULES=0
 SSH_PORTS_FOR_UFW="22"
 ENABLE_TOR_SANDBOX=1
+CONFIGURE_METRICS_PORT=0
+METRICS_PORT_ADDRESS="127.0.0.1:9035"
 INITIAL_MYFAMILY_AFTER_SETUP=0
+CONTACT_INFO_URL=""
+FAMILY_MODE="none"
+FAMILY_ID=""
+FAMILY_KEY_NAME="relay-family"
+FAMILY_IMPORT_KEY_PATH=""
+FAMILY_KEY_HEADER="== ed25519v1-secret: fmly-id =="
+
+# Tor 0.4.8 reached end-of-life on 2026-06-01 and the directory authorities
+# now reject it (tor 0.4.9.12 release notes), so 0.4.9 is the floor.
+MIN_TOR_VERSION="0.4.9"
 
 TORRC_PATH="/etc/tor/torrc"
 TOR_SERVICE_DEFAULTS_TORRC="/usr/share/tor/tor-service-defaults-torrc"
@@ -171,8 +183,11 @@ Supported targets:
 
 This script can configure either a Guard/middle relay or an exit relay.
 If an existing relay is detected, it opens the relay operator console:
-MyFamily, health checks, directory status, service controls, logs,
-safe config edits, backups, package tools, repair, and script cleanup.
+relay family (FamilyId keys and legacy MyFamily), health checks, directory
+status, service controls, logs, safe config edits, backups, package tools,
+repair, and script cleanup.
+
+Requires tor ${MIN_TOR_VERSION} or newer, installed from deb.torproject.org.
 EOF
 }
 
@@ -1529,6 +1544,7 @@ collect_relay_mode() {
   else
     RELAY_MODE="guard"
   fi
+  check_relay_resources
 }
 
 list_ipv6_candidates() {
@@ -1577,6 +1593,96 @@ check_ipv6_connectivity() {
   return "$failed"
 }
 
+# Build a ContactInfo string following the ContactInfo Information Sharing
+# Specification v3 (https://nusenu.github.io/ContactInfo-Information-Sharing-Specification/).
+# Arguments: email, website URL (optional), hoster domain (optional).
+build_ciiss_contact() {
+  local email=$1
+  local url=${2:-}
+  local hoster=${3:-}
+  local -a fields=()
+
+  [[ -n "$email" ]] && fields+=("email:${email//@/[]}")
+  if [[ -n "$url" ]]; then
+    # CIISS requires a proof whenever url is set. v3 proves ownership with
+    # the relay family ID published under the website's /.well-known path.
+    fields+=("url:${url}" "proof:uri-familyid-ed25519")
+  fi
+  [[ -n "$hoster" ]] && fields+=("hoster:${hoster}")
+  fields+=("ciissversion:3")
+  printf '%s' "${fields[*]}"
+}
+
+valid_contact_email() {
+  [[ $1 =~ ^[^[:space:]@#]+@[^[:space:]@#]+\.[^[:space:]@#]+$ ]]
+}
+
+valid_contact_url() {
+  [[ $1 =~ ^https://[A-Za-z0-9.-]+\.[A-Za-z]{2,}(/[^[:space:]#]*)?$ ]]
+}
+
+valid_hoster_domain() {
+  [[ $1 =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]
+}
+
+# Prompt for ContactInfo, offering the CIISS v3 builder first. Sets
+# CONTACT_INFO and CONTACT_INFO_URL.
+collect_contact_info() {
+  local current=${1:-}
+  local choice
+  local email=""
+  local url=""
+  local hoster=""
+
+  CONTACT_INFO_URL=""
+  info "ContactInfo is public. Tor expects a working email address; the CIISS v3 format also makes it machine-readable."
+  choose_menu choice "ContactInfo format" "1" \
+    "1" "Guided CIISS v3 string" "email:you[]example.org ... ciissversion:3" \
+    "2" "Free-form text" "Enter any contact string yourself"
+
+  if [[ "$choice" == "2" ]]; then
+    while true; do
+      CONTACT_INFO=$(prompt_line "ContactInfo string" "$current")
+      if valid_contact_info "$CONTACT_INFO"; then
+        return 0
+      fi
+      warn "ContactInfo must be non-empty, under 250 characters, and cannot contain '#'."
+    done
+  fi
+
+  while true; do
+    email=$(prompt_line "Operator email address (published with @ written as [])")
+    valid_contact_email "$email" && break
+    warn "Enter an email address such as tor-ops@example.org."
+  done
+
+  while true; do
+    url=$(prompt_line "Operator website (https://..., blank to skip)")
+    [[ -z "$url" ]] && break
+    valid_contact_url "$url" && break
+    warn "Enter an https:// URL without spaces, or leave it blank."
+  done
+
+  while true; do
+    hoster=$(prompt_line "Hosting provider domain, e.g. hetzner.com (blank to skip)")
+    [[ -z "$hoster" ]] && break
+    valid_hoster_domain "$hoster" && break
+    warn "Enter a bare domain without https:// or a path, or leave it blank."
+  done
+
+  CONTACT_INFO=$(build_ciiss_contact "$email" "$url" "$hoster")
+  CONTACT_INFO_URL=$url
+  success "ContactInfo: ${CONTACT_INFO}"
+  if [[ -n "$url" ]]; then
+    warn "Publish your relay FamilyId at https://$(url_domain "$url")/.well-known/tor-relay/ed25519-family-id.txt so the url: field can be verified."
+  fi
+}
+
+url_domain() {
+  local domain=${1#https://}
+  printf '%s' "${domain%%/*}"
+}
+
 collect_relay_identity() {
   section "Relay Identity"
   info "Your nickname and ContactInfo will be public in Tor relay directories."
@@ -1589,13 +1695,7 @@ collect_relay_identity() {
     warn "Use 1 to 19 characters, letters and numbers only."
   done
 
-  while true; do
-    CONTACT_INFO=$(prompt_line "ContactInfo email or contact string")
-    if valid_contact_info "$CONTACT_INFO"; then
-      break
-    fi
-    warn "ContactInfo must be non-empty, under 250 characters, and cannot contain '#'."
-  done
+  collect_contact_info ""
 
   while true; do
     OR_PORT=$(prompt_line "ORPort for incoming Tor connections" "9001")
@@ -1726,15 +1826,63 @@ collect_exit_options() {
   fi
 }
 
-collect_initial_myfamily() {
-  section "Relay Family"
+collect_relay_family() {
+  local choice
+  local path
 
-  info "Use MyFamily when you control more than one public Tor relay."
-  if ask_yes_no "Do you control other Tor relays that should be in MyFamily?" "no"; then
-    INITIAL_MYFAMILY_AFTER_SETUP=1
-    info "After Tor starts and has a local fingerprint, the operator console will open the MyFamily manager."
-  else
-    INITIAL_MYFAMILY_AFTER_SETUP=0
+  section "Relay Family"
+  info "Relays run by the same operator must declare one family, so clients never use two of them in one circuit."
+  info "Since Tor 0.4.9 a family is a shared key (FamilyId). Every relay in the family gets a copy of the same key file."
+
+  FAMILY_MODE="none"
+  FAMILY_ID=""
+  FAMILY_KEY_NAME="relay-family"
+  FAMILY_IMPORT_KEY_PATH=""
+  INITIAL_MYFAMILY_AFTER_SETUP=0
+
+  choose_menu choice "Relay family" "1" \
+    "1" "This is my only relay" "No family needed; add one later from the operator console" \
+    "2" "Create a new family key" "First relay of a new family" \
+    "3" "Import an existing family key" "Copy <name>.secret_family_key from one of your relays first"
+
+  case "$choice" in
+    2)
+      FAMILY_MODE="generate"
+      while true; do
+        FAMILY_KEY_NAME=$(prompt_line "Family key name" "relay-family")
+        valid_family_key_name "$FAMILY_KEY_NAME" && break
+        warn "Use letters, numbers, dots, dashes or underscores (max 64 characters)."
+      done
+      info "The key is generated with 'tor --keygen-family' after Tor is installed."
+      ;;
+    3)
+      FAMILY_MODE="import"
+      while true; do
+        path=$(prompt_line "Path to the .secret_family_key file on this server")
+        if family_key_file_valid "$path"; then
+          break
+        fi
+        warn "Expected a 96-byte Tor family key file ending in .secret_family_key."
+      done
+      FAMILY_IMPORT_KEY_PATH=$path
+      FAMILY_KEY_NAME=$(basename "$path" .secret_family_key)
+      if ! FAMILY_ID=$(family_id_for_key_file "$path"); then
+        while true; do
+          FAMILY_ID=$(prompt_line "FamilyId shown on the relay that created the key")
+          valid_family_id "$FAMILY_ID" && break
+          warn "A FamilyId is 43 base64 characters, as printed by 'tor --keygen-family'."
+        done
+      fi
+      success "Family ${FAMILY_KEY_NAME}: FamilyId ${FAMILY_ID}"
+      ;;
+    *) ;;
+  esac
+
+  if [[ "$FAMILY_MODE" != "none" ]]; then
+    info "Tor 0.4.8 is end-of-life, so current clients only need FamilyId. A legacy MyFamily list is optional."
+    if ask_yes_no "Also maintain a legacy MyFamily fingerprint list after setup?" "no"; then
+      INITIAL_MYFAMILY_AFTER_SETUP=1
+    fi
   fi
 }
 
@@ -2032,6 +2180,13 @@ collect_maintenance_options() {
     INSTALL_NYX=0
   fi
 
+  info "Tor's MetricsPort serves Prometheus metrics (overload, DNS errors, traffic) for monitoring."
+  if ask_yes_no "Enable MetricsPort on ${METRICS_PORT_ADDRESS}, reachable from this server only?" "no"; then
+    CONFIGURE_METRICS_PORT=1
+  else
+    CONFIGURE_METRICS_PORT=0
+  fi
+
   collect_firewall_options
 
   info "SafeLogging stays enabled. The optional Tor syscall sandbox adds Linux hardening."
@@ -2051,6 +2206,15 @@ build_torrc() {
     printf '\n'
     printf 'Nickname %s\n' "$RELAY_NICKNAME"
     printf 'ContactInfo %s\n' "$(torrc_quote "$CONTACT_INFO")"
+    if valid_family_id "$FAMILY_ID"; then
+      printf '\n'
+      printf '# Managed relay family (Tor 0.4.9 FamilyId). Every relay in the family shares the key.\n'
+      printf 'FamilyId %s\n' "$FAMILY_ID"
+    elif [[ "$FAMILY_MODE" == "generate" ]]; then
+      printf '\n'
+      printf '# FamilyId <generated with tor --keygen-family during apply>\n'
+    fi
+    printf '\n'
     printf 'ORPort %s\n' "$OR_PORT"
     if ((ENABLE_IPV6)); then
       printf 'ORPort [%s]:%s\n' "$IPV6_ADDRESS" "$OR_PORT"
@@ -2077,6 +2241,12 @@ build_torrc() {
     printf 'SafeLogging 1\n'
     if ((ENABLE_TOR_SANDBOX)); then
       printf 'Sandbox 1\n'
+    fi
+    if ((CONFIGURE_METRICS_PORT)); then
+      printf '\n'
+      printf '# Local-only Prometheus metrics. Never expose this port publicly.\n'
+      printf 'MetricsPort %s\n' "$METRICS_PORT_ADDRESS"
+      printf 'MetricsPortPolicy accept 127.0.0.1\n'
     fi
     if ((CONFIGURE_RELAY_BANDWIDTH)); then
       printf '\n'
@@ -2901,6 +3071,389 @@ show_myfamily_status() {
   info "Published family changes can take hours to show up in consensus and Relay Search."
 }
 
+# --- Relay families (Happy Families, proposal 321, Tor 0.4.9+) -------------
+#
+# `tor --keygen-family NAME` writes NAME.secret_family_key (a 96-byte file that
+# starts with FAMILY_KEY_HEADER) and NAME.public_family_id into the current
+# directory and prints "FamilyId <id>". Every relay in the family needs the
+# same secret key in its KeyDirectory plus a matching "FamilyId <id>" line.
+# `tor --verify-config` does not check that the key exists, so this script
+# does. See https://community.torproject.org/relay/setup/post-install/family-ids/
+
+valid_family_id() {
+  [[ $1 =~ ^[A-Za-z0-9+/]{43}$ ]]
+}
+
+valid_family_key_name() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+}
+
+family_key_file_valid() {
+  local path=$1
+  local header
+
+  [[ -f "$path" && ! -L "$path" && "$path" == *.secret_family_key ]] || return 1
+  [[ "$(wc -c < "$path")" -eq 96 ]] || return 1
+  header=$(head -c "${#FAMILY_KEY_HEADER}" "$path")
+  [[ "$header" == "$FAMILY_KEY_HEADER" ]]
+}
+
+# Print the FamilyId stored next to a secret key (NAME.public_family_id).
+family_id_for_key_file() {
+  local key_file=$1
+  local id_file="${key_file%.secret_family_key}.public_family_id"
+  local id
+
+  [[ -r "$id_file" ]] || return 1
+  id=$(tr -d '[:space:]' < "$id_file")
+  valid_family_id "$id" || return 1
+  printf '%s' "$id"
+}
+
+tor_family_key_directory() {
+  local dir
+
+  dir=$(read_torrc_directive FamilyKeyDirectory || true)
+  [[ -n "$dir" ]] || dir=$(read_torrc_directive KeyDirectory || true)
+  [[ -n "$dir" ]] || dir="$(tor_datadirectory)/keys"
+  printf '%s' "${dir%/}"
+}
+
+tor_run_user() {
+  if id -u debian-tor > /dev/null 2>&1; then
+    printf 'debian-tor'
+  else
+    printf 'root'
+  fi
+}
+
+torrc_family_ids() {
+  torrc_exists || return 0
+  awk '
+    /^[[:space:]]*#/ { next }
+    tolower($1) == "familyid" && NF >= 2 { print $2 }
+  ' "$TORRC_PATH"
+}
+
+# Succeeds when a key for this FamilyId is installed in the key directory.
+family_key_installed_for_id() {
+  local id=$1
+  local keys_dir
+  local key_file
+
+  keys_dir=$(tor_family_key_directory)
+  for key_file in "${keys_dir}"/*.secret_family_key; do
+    [[ -e "$key_file" ]] || continue
+    if [[ "$id" == "*" || "$(family_id_for_key_file "$key_file" || true)" == "$id" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Install a secret family key (and its public ID) into Tor's key directory,
+# owned by the Tor user. Existing keys are never overwritten.
+install_family_key() {
+  local source=$1
+  local name=$2
+  local id=$3
+  local keys_dir
+  local user
+  local target
+  local id_file
+  local -a owner=()
+
+  keys_dir=$(tor_family_key_directory)
+  target="${keys_dir}/${name}.secret_family_key"
+  id_file="${TMP_DIR}/${name}.public_family_id"
+  user=$(tor_run_user)
+  # Only root can hand files to the Tor user (tests run unprivileged).
+  ((EUID == 0 || DRY_RUN)) && owner=(-o "$user" -g "$user")
+
+  if [[ -e "$target" ]]; then
+    if cmp -s "$source" "$target"; then
+      success "Family key already installed: ${target}"
+      return 0
+    fi
+    die "A different family key already exists at ${target}. Choose another key name; existing keys are never overwritten."
+  fi
+
+  printf '%s\n' "$id" > "$id_file"
+  if ((DRY_RUN)); then
+    info "Would install the family key into ${keys_dir}"
+    print_command install -d -m 0700 "${owner[@]}" "$keys_dir"
+    print_command install -m 0600 "${owner[@]}" "$source" "$target"
+    return 0
+  fi
+
+  [[ -d "$keys_dir" ]] || install -d -m 0700 "${owner[@]}" "$keys_dir"
+  install -m 0600 "${owner[@]}" "$source" "$target"
+  install -m 0600 "${owner[@]}" "$id_file" "${keys_dir}/${name}.public_family_id"
+  success "Installed family key ${target}"
+}
+
+# Generate a new family key with tor itself and install it. Sets FAMILY_ID.
+generate_family_key() {
+  local name=$1
+  local work_dir
+  local empty_torrc
+
+  if ((DRY_RUN)); then
+    info "Would generate a new family key named ${name}"
+    print_command tor --keygen-family "$name"
+    install_family_key /dev/null "$name" "$FAMILY_ID"
+    return 0
+  fi
+
+  work_dir=$(mktemp -d "${TMP_DIR%/}/family.XXXXXX")
+  empty_torrc="${work_dir}/empty.torrc"
+  : > "$empty_torrc"
+  # keygen-family writes into the working directory; empty config files keep
+  # the live torrc (and its Sandbox setting) out of the way.
+  run_cmd "Generating family key ${name}" \
+    env -C "$work_dir" tor --defaults-torrc "$empty_torrc" -f "$empty_torrc" --keygen-family "$name"
+
+  family_key_file_valid "${work_dir}/${name}.secret_family_key" \
+    || die "tor --keygen-family did not produce a valid ${name}.secret_family_key."
+  FAMILY_ID=$(family_id_for_key_file "${work_dir}/${name}.secret_family_key") \
+    || die "tor --keygen-family did not produce a readable ${name}.public_family_id."
+  install_family_key "${work_dir}/${name}.secret_family_key" "$name" "$FAMILY_ID"
+  success "New FamilyId: ${FAMILY_ID}"
+}
+
+# Apply the family choice made during guided setup (after tor is installed).
+setup_relay_family() {
+  case "$FAMILY_MODE" in
+    generate)
+      generate_family_key "$FAMILY_KEY_NAME"
+      ;;
+    import)
+      install_family_key "$FAMILY_IMPORT_KEY_PATH" "$FAMILY_KEY_NAME" "$FAMILY_ID"
+      ;;
+    *) ;;
+  esac
+}
+
+# Replace every FamilyId line in the live torrc with the given IDs.
+write_family_ids_to_torrc() {
+  local output=$1
+  shift
+  local ids
+  ids=$(printf '%s\n' "$@")
+
+  torrc_exists || die "${TORRC_PATH} does not exist yet."
+  awk -v ids="$ids" '
+    function emit_family(   count, parts, i) {
+      if (ids == "") return
+      print ""
+      print "# Managed relay family (Tor 0.4.9 FamilyId). Every relay in the family shares the key."
+      count = split(ids, parts, "\n")
+      for (i = 1; i <= count; i++) {
+        if (parts[i] != "") print "FamilyId " parts[i]
+      }
+    }
+    /^[[:space:]]*#[[:space:]]*Managed relay family/ { next }
+    !/^[[:space:]]*#/ && tolower($1) == "familyid" { next }
+    {
+      print
+      if (!inserted && $0 ~ /^[[:space:]]*ContactInfo[[:space:]]+/) {
+        emit_family()
+        inserted = 1
+      }
+    }
+    END {
+      if (!inserted) emit_family()
+    }
+  ' "$TORRC_PATH" > "$output"
+}
+
+show_relay_family_status() {
+  local report_file="${TMP_DIR}/relay-family.txt"
+  local keys_dir
+  local id
+  local key_file
+  local -a ids=()
+  local legacy_count
+
+  keys_dir=$(tor_family_key_directory)
+  mapfile -t ids < <(torrc_family_ids)
+  legacy_count=$(torrc_myfamily_fingerprints | awk 'END { print NR + 0 }')
+
+  {
+    printf 'Relay family status\n\n'
+    printf 'Family key directory: %s\n\n' "$keys_dir"
+    if ((${#ids[@]} == 0)); then
+      printf 'No FamilyId is configured in %s.\n' "$TORRC_PATH"
+    fi
+    for id in "${ids[@]}"; do
+      if family_key_installed_for_id "$id"; then
+        printf 'FamilyId %s  key: installed\n' "$id"
+      else
+        printf 'FamilyId %s  key: NOT FOUND (Tor cannot prove membership)\n' "$id"
+      fi
+    done
+    printf '\nInstalled family keys:\n'
+    for key_file in "${keys_dir}"/*.secret_family_key; do
+      [[ -e "$key_file" ]] || continue
+      printf '  %s  FamilyId %s\n' "$key_file" "$(family_id_for_key_file "$key_file" || printf 'unknown')"
+    done
+    printf '\nLegacy MyFamily fingerprints: %s\n' "$legacy_count"
+  } > "$report_file"
+
+  show_file_panel "Relay Family" "$report_file"
+}
+
+show_family_share_instructions() {
+  local keys_dir
+  local key_file
+  local report_file="${TMP_DIR}/relay-family-share.txt"
+
+  keys_dir=$(tor_family_key_directory)
+  {
+    printf 'Add another relay to this family\n\n'
+    printf '1. Copy the secret key and its public ID to the new relay, for example:\n\n'
+    for key_file in "${keys_dir}"/*.secret_family_key; do
+      [[ -e "$key_file" ]] || continue
+      printf '   scp %q %q root@NEW-RELAY:/root/\n' "$key_file" "${key_file%.secret_family_key}.public_family_id"
+    done
+    printf '\n2. On the new relay, run this script and choose "Import an existing family key"\n'
+    printf '   (guided setup) or "Relay family" > "Import family key" (operator console).\n\n'
+    printf '3. Delete the copies from /root on the new relay afterwards.\n\n'
+    printf 'The secret key proves family membership. Treat it like a relay identity key:\n'
+    printf 'transfer it only over SSH and keep it out of backups you share.\n'
+  } > "$report_file"
+  show_file_panel "Share Family Key" "$report_file"
+}
+
+apply_family_ids() {
+  local candidate
+  candidate=$(mktemp_in_workspace)
+
+  write_family_ids_to_torrc "$candidate" "$@"
+  ensure_timestamp
+  verify_tor_config_file "$candidate"
+  install_file_if_changed "$candidate" "$TORRC_PATH" "0644"
+  # With Sandbox 1, Tor cannot open new family key files after start-up, so
+  # family changes need a restart rather than a reload.
+  if ask_yes_no "Restart Tor now to apply the family change?" "yes"; then
+    OR_PORT=$(read_torrc_first_orport || printf '%s' "$OR_PORT")
+    restart_and_verify_tor
+  else
+    warn "The family change is written but inactive until Tor restarts."
+  fi
+}
+
+manage_relay_family() {
+  local choice
+  local path
+  local name
+  local id
+  local -a ids=()
+  local -a kept=()
+
+  section "Relay Family"
+  torrc_exists || die "${TORRC_PATH} does not exist yet. Run the guided setup first."
+  info "Tor 0.4.9 families use a shared key (FamilyId). MyFamily fingerprint lists are the legacy method."
+
+  while true; do
+    mapfile -t ids < <(torrc_family_ids)
+    choose_menu choice "Relay family: ${#ids[@]} FamilyId line(s)" "s" \
+      "s" "Show family status" "FamilyId lines, installed keys, legacy MyFamily" \
+      "g" "Create a new family key" "Start a family, or rotate to a new key" \
+      "i" "Import family key" "Join a family using a key copied from another relay" \
+      "e" "Share with another relay" "How to copy this family's key safely" \
+      "r" "Remove a FamilyId" "Leave a family (key files stay on disk)" \
+      "m" "Legacy MyFamily editor" "Fingerprint lists for pre-0.4.9 clients" \
+      "q" "Back" "Return to operator console"
+
+    case "$choice" in
+      s)
+        show_relay_family_status
+        ;;
+      g | i)
+        if [[ "$choice" == "g" ]]; then
+          while true; do
+            name=$(prompt_line "Family key name" "relay-family")
+            valid_family_key_name "$name" && break
+            warn "Use letters, numbers, dots, dashes or underscores (max 64 characters)."
+          done
+          FAMILY_ID=""
+          generate_family_key "$name"
+          id=$FAMILY_ID
+        else
+          path=$(prompt_line "Path to the .secret_family_key file")
+          if ! family_key_file_valid "$path"; then
+            warn "Expected a 96-byte Tor family key file ending in .secret_family_key."
+            continue
+          fi
+          if ! id=$(family_id_for_key_file "$path"); then
+            id=$(prompt_line "FamilyId shown on the relay that created the key")
+            valid_family_id "$id" || {
+              warn "A FamilyId is 43 base64 characters."
+              continue
+            }
+          fi
+          install_family_key "$path" "$(basename "$path" .secret_family_key)" "$id"
+        fi
+        if ((DRY_RUN)); then
+          info "Would add FamilyId ${id:-<generated id>} to ${TORRC_PATH} and restart Tor."
+          continue
+        fi
+        kept=("$id")
+        if ((${#ids[@]})) && ask_yes_no "Keep the existing FamilyId line(s) as well (key rotation or multiple families)?" "yes"; then
+          kept=("${ids[@]}" "$id")
+        fi
+        apply_family_ids "${kept[@]}"
+        ;;
+      e)
+        show_family_share_instructions
+        ;;
+      r)
+        if ((${#ids[@]} == 0)); then
+          warn "No FamilyId is configured."
+          continue
+        fi
+        local -a remove_options=()
+        local -a picked=()
+        local index
+        for index in "${!ids[@]}"; do
+          remove_options+=("$((index + 1))" "${ids[$index]}" "FamilyId line" "removable")
+        done
+        choose_checklist picked "FamilyId lines to remove" --delete "${remove_options[@]}" || continue
+        kept=()
+        for index in "${!ids[@]}"; do
+          selection_contains "$((index + 1))" "${picked[@]}" || kept+=("${ids[$index]}")
+        done
+        if ask_yes_no "Remove ${#picked[@]} FamilyId line(s)? Key files are kept." "no"; then
+          apply_family_ids "${kept[@]}"
+        fi
+        ;;
+      m)
+        manage_myfamily
+        ;;
+      q | "")
+        return 0
+        ;;
+    esac
+  done
+}
+
+# Warn about family problems Tor logged since the given time.
+check_family_logs() {
+  local since_time=$1
+  local warnings
+
+  [[ -n "$(torrc_family_ids)" ]] || return 0
+  command_exists journalctl || return 0
+  warnings=$(journalctl -u "$TOR_SERVICE" --since "$since_time" -p warning --no-pager -o cat 2> /dev/null | grep -i 'family' || true)
+  if [[ -n "$warnings" ]]; then
+    warn "Tor logged family warnings after the restart:"
+    printf '%s\n' "$warnings" | head -n 5 >&2
+  else
+    success "No family key warnings were logged."
+  fi
+}
+
 ensure_timestamp() {
   TIMESTAMP=${TIMESTAMP:-$(date -u '+%Y%m%dT%H%M%SZ')}
 }
@@ -3030,17 +3583,47 @@ reload_or_restart_tor() {
   fi
 }
 
+# apply_existing_torrc_change CANDIDATE DESCRIPTION [reload|restart]
 apply_existing_torrc_change() {
   local candidate=$1
   local description=$2
+  local activation=${3:-reload}
 
   ensure_timestamp
   verify_tor_config_file "$candidate"
   install_file_if_changed "$candidate" "$TORRC_PATH" "0644"
-  if ask_yes_no "Reload Tor now to apply ${description}?" "yes"; then
+  if [[ "$activation" == "restart" ]]; then
+    if ask_yes_no "Restart Tor now to apply ${description}?" "yes"; then
+      OR_PORT=$(read_torrc_first_orport || printf '%s' "$OR_PORT")
+      restart_and_verify_tor
+    else
+      warn "Change is written but will not be active until Tor restarts."
+    fi
+  elif ask_yes_no "Reload Tor now to apply ${description}?" "yes"; then
     reload_or_restart_tor
   else
     warn "Change is written but will not be active until Tor reloads or restarts."
+  fi
+}
+
+# Rewrite the live torrc without MetricsPort lines, then add the local-only
+# MetricsPort block when ENABLE is 1.
+write_torrc_metrics_port() {
+  local output=$1
+  local enable=$2
+
+  torrc_exists || die "${TORRC_PATH} does not exist yet."
+  awk '
+    /^[[:space:]]*#[[:space:]]*Local-only Prometheus metrics/ { next }
+    !/^[[:space:]]*#/ && (tolower($1) == "metricsport" || tolower($1) == "metricsportpolicy") { next }
+    { print }
+  ' "$TORRC_PATH" > "$output"
+  if ((enable)); then
+    {
+      printf '\n# Local-only Prometheus metrics. Never expose this port publicly.\n'
+      printf 'MetricsPort %s\n' "$METRICS_PORT_ADDRESS"
+      printf 'MetricsPortPolicy accept 127.0.0.1\n'
+    } >> "$output"
   fi
 }
 
@@ -3057,6 +3640,7 @@ configure_common_torrc_menu() {
       "3" "Bandwidth and traffic" "Recalculate relay bandwidth/accounting limits" \
       "4" "Sandbox" "Toggle Tor syscall Sandbox option" \
       "5" "Disable SOCKS listener" "Write SocksPort 0 for relay-only servers" \
+      "7" "MetricsPort" "Toggle local-only Prometheus metrics on ${METRICS_PORT_ADDRESS}" \
       "6" "Back" "Return to operator console"
 
     case "$choice" in
@@ -3075,15 +3659,10 @@ configure_common_torrc_menu() {
         ;;
       2)
         current=$(strip_torrc_quotes "$(read_torrc_directive ContactInfo || true)")
-        while true; do
-          current=$(prompt_line "ContactInfo email or contact string" "$current")
-          if valid_contact_info "$current"; then
-            break
-          fi
-          warn "ContactInfo must be non-empty, under 250 characters, and cannot contain '#'."
-        done
+        info "Current ContactInfo: ${current:-none}"
+        collect_contact_info "$current"
         candidate=$(mktemp_in_workspace)
-        write_torrc_set_directive "$candidate" ContactInfo "ContactInfo $(torrc_quote "$current")"
+        write_torrc_set_directive "$candidate" ContactInfo "ContactInfo $(torrc_quote "$CONTACT_INFO")"
         apply_existing_torrc_change "$candidate" "ContactInfo change"
         ;;
       3)
@@ -3100,12 +3679,22 @@ configure_common_torrc_menu() {
         fi
         candidate=$(mktemp_in_workspace)
         write_torrc_set_directive "$candidate" Sandbox "$current"
-        apply_existing_torrc_change "$candidate" "Sandbox change"
+        # Tor refuses to change Sandbox on reload; it needs a restart.
+        apply_existing_torrc_change "$candidate" "Sandbox change" restart
         ;;
       5)
         candidate=$(mktemp_in_workspace)
         write_torrc_set_directive "$candidate" SocksPort "SocksPort 0"
         apply_existing_torrc_change "$candidate" "SOCKS listener change"
+        ;;
+      7)
+        candidate=$(mktemp_in_workspace)
+        if ask_yes_no "Enable MetricsPort on ${METRICS_PORT_ADDRESS} (local access only)?" "yes"; then
+          write_torrc_metrics_port "$candidate" 1
+        else
+          write_torrc_metrics_port "$candidate" 0
+        fi
+        apply_existing_torrc_change "$candidate" "MetricsPort change"
         ;;
       6 | "")
         return 0
@@ -3165,6 +3754,7 @@ fields = [
     ("Observed bandwidth", relay.get("observed_bandwidth", "")),
     ("Consensus weight", relay.get("consensus_weight", "")),
     ("Platform", relay.get("platform", "")),
+    ("Family IDs", ", ".join(relay.get("family_ids", []) or [])),
     ("Contact", relay.get("contact", "")),
 ]
 for key, value in fields:
@@ -3313,7 +3903,7 @@ backup_identity_keys() {
   keys_dir="${data_dir%/}/keys"
   [[ -d "$keys_dir" ]] || die "Tor keys directory not found: ${keys_dir}"
 
-  warn "Relay identity keys are sensitive. Store the archive somewhere secure and private."
+  warn "The archive holds the relay identity keys and any family keys. Store it somewhere secure and private."
   if ! ask_yes_no "Create a root-only archive of ${keys_dir}?" "yes"; then
     return 0
   fi
@@ -3701,7 +4291,7 @@ operator_report() {
       awk '
         /^[[:space:]]*#/ { next }
         /^[[:space:]]*$/ { next }
-        $1 ~ /^(Nickname|ContactInfo|ORPort|ExitRelay|ReducedExitPolicy|IPv6Exit|SocksPort|RelayBandwidthRate|RelayBandwidthBurst|AccountingMax|AccountingRule|MyFamily|SafeLogging|Sandbox)$/ {
+        $1 ~ /^(Nickname|ContactInfo|ORPort|ExitRelay|ReducedExitPolicy|IPv6Exit|SocksPort|RelayBandwidthRate|RelayBandwidthBurst|AccountingMax|AccountingRule|FamilyId|MyFamily|SafeLogging|Sandbox|MetricsPort|MetricsPortPolicy)$/ {
           print
         }
       ' "$TORRC_PATH"
@@ -3719,6 +4309,17 @@ run_relay_health_check() {
   local local_fp
 
   section "Relay Health Check"
+
+  local version
+  if version=$(tor_installed_version); then
+    if version_at_least "$version" "$MIN_TOR_VERSION"; then
+      success "tor ${version} is a supported release series."
+    else
+      warn "tor ${version} is older than ${MIN_TOR_VERSION}; the directory authorities reject it. Use Packages and tools > Update Tor."
+    fi
+  else
+    warn "Could not read the installed tor version."
+  fi
 
   if torrc_exists; then
     success "Found ${TORRC_PATH}."
@@ -3760,7 +4361,23 @@ run_relay_health_check() {
   fi
 
   check_tor_orport_self_test "1 hour ago" 0
-  show_myfamily_status
+
+  local id
+  local -a family_ids=()
+  mapfile -t family_ids < <(torrc_family_ids)
+  for id in "${family_ids[@]}"; do
+    if family_key_installed_for_id "$id"; then
+      success "FamilyId ${id}: key installed."
+    else
+      warn "FamilyId ${id}: no matching key in $(tor_family_key_directory). Import it via Relay family."
+    fi
+  done
+  if ((${#family_ids[@]} == 0)) && [[ -n "$(torrc_myfamily_fingerprints)" ]]; then
+    warn "Only a legacy MyFamily list is configured. Tor 0.4.9 families use FamilyId keys; see Relay family."
+  fi
+  if [[ -n "$(torrc_myfamily_fingerprints)" ]]; then
+    show_myfamily_status
+  fi
 }
 
 repair_menu() {
@@ -3822,8 +4439,8 @@ existing_relay_menu() {
     section "Relay Operator Console"
     info "An existing Tor relay configuration or active Tor service was detected."
     choose_menu choice "What would you like to do?" "1" \
-      "1" "Manage MyFamily" "Add, remove, verify, and save family fingerprints" \
-      "2" "Run relay health check" "Service, config, ORPort, logs, MyFamily" \
+      "1" "Relay family" "FamilyId keys: create, import, share; legacy MyFamily" \
+      "2" "Run relay health check" "Version, service, config, ORPort, family" \
       "3" "Directory status" "Fetch published relay status from Tor Metrics" \
       "4" "Service controls" "Start, reload, restart, stop, enable, disable" \
       "5" "Logs and signals" "Recent logs, follow logs, ORPort self-test" \
@@ -3839,7 +4456,7 @@ existing_relay_menu() {
 
     case "$choice" in
       1)
-        manage_myfamily
+        manage_relay_family
         ;;
       2)
         run_relay_health_check
@@ -3916,7 +4533,14 @@ show_summary_body() {
   else
     printf '%bIPv6 ORPort%b: disabled\n' "$BOLD" "$RESET"
   fi
-  printf '%bInitial MyFamily manager%b: %s\n' "$BOLD" "$RESET" "$([[ $INITIAL_MYFAMILY_AFTER_SETUP -eq 1 ]] && printf yes || printf no)"
+  case "$FAMILY_MODE" in
+    generate) printf '%bRelay family%b: new family key "%s" (FamilyId generated during apply)\n' "$BOLD" "$RESET" "$FAMILY_KEY_NAME" ;;
+    import) printf '%bRelay family%b: import "%s", FamilyId %s\n' "$BOLD" "$RESET" "$FAMILY_KEY_NAME" "$FAMILY_ID" ;;
+    *) printf '%bRelay family%b: none (single relay)\n' "$BOLD" "$RESET" ;;
+  esac
+  if ((INITIAL_MYFAMILY_AFTER_SETUP)); then
+    printf '%bLegacy MyFamily editor%b: opens after setup\n' "$BOLD" "$RESET"
+  fi
   if ((CONFIGURE_RELAY_BANDWIDTH)); then
     printf '%bBandwidth%b: %s %s/s average, %s %s/s burst\n' "$BOLD" "$RESET" "$RELAY_BANDWIDTH_RATE_VALUE" "$RELAY_BANDWIDTH_RATE_UNIT" "$RELAY_BANDWIDTH_BURST_VALUE" "$RELAY_BANDWIDTH_BURST_UNIT"
     if [[ "$BANDWIDTH_MODE" == "steady" ]]; then
@@ -3952,6 +4576,7 @@ show_summary_body() {
     printf '%bEnable UFW%b: yes, after allowing SSH TCP %s and ORPort TCP %s\n' "$BOLD" "$RESET" "$SSH_PORTS_FOR_UFW" "$OR_PORT"
   fi
   printf '%bTor Sandbox%b: %s\n' "$BOLD" "$RESET" "$([[ $ENABLE_TOR_SANDBOX -eq 1 ]] && printf yes || printf no)"
+  printf '%bMetricsPort%b: %s\n' "$BOLD" "$RESET" "$([[ $CONFIGURE_METRICS_PORT -eq 1 ]] && printf '%s (local only)' "$METRICS_PORT_ADDRESS" || printf no)"
 
   printf '\n%s\n' "torrc preview:"
   while IFS= read -r line; do
@@ -3974,6 +4599,11 @@ show_summary_body() {
       printf '  - Lock %s with chattr +i.\n' "$RESOLV_CONF_PATH"
     fi
   fi
+  case "$FAMILY_MODE" in
+    generate) printf '  - Generate a family key with tor --keygen-family and install it in the Tor key directory.\n' ;;
+    import) printf '  - Install family key %s in the Tor key directory.\n' "$FAMILY_IMPORT_KEY_PATH" ;;
+    *) ;;
+  esac
   printf '  - Back up and update %s.\n' "$TORRC_PATH"
   if ((ENABLE_AUTO_UPDATES)); then
     printf '  - Configure unattended upgrades for security and Tor packages.\n'
@@ -4071,6 +4701,46 @@ install_tor_package() {
   else
     warn "deb.torproject.org-keyring is not available for '${OS_CODENAME}' yet."
     warn "Continuing because the Tor Project signing key was already installed at ${TOR_KEYRING_PATH}."
+  fi
+
+  require_supported_tor_version
+}
+
+# Print the installed tor version, e.g. 0.4.9.13 (from "Tor version 0.4.9.13.").
+tor_installed_version() {
+  command_exists tor || return 1
+  tor --version 2> /dev/null | awk 'NR == 1 && $1 == "Tor" && $2 == "version" { v = $3; sub(/\.$/, "", v); print v; found = 1 } END { exit found ? 0 : 1 }'
+}
+
+# version_at_least CURRENT MINIMUM
+version_at_least() {
+  printf '%s\n%s\n' "$2" "$1" | sort -V -C
+}
+
+require_supported_tor_version() {
+  local version
+
+  version=$(tor_installed_version) || die "Could not read the installed tor version."
+  if ! version_at_least "$version" "$MIN_TOR_VERSION"; then
+    die "tor ${version} is installed, but the Tor network rejects relays older than ${MIN_TOR_VERSION}. Check apt-cache policy tor."
+  fi
+  success "tor ${version} meets the ${MIN_TOR_VERSION} minimum."
+}
+
+# Warn about hosts below the Tor Project's documented relay RAM minimums
+# (https://community.torproject.org/relay/relays-requirements/).
+check_relay_resources() {
+  local mem_kib
+  local min_mib=512
+
+  [[ "$RELAY_MODE" == "exit" ]] && min_mib=1536
+  mem_kib=$(awk '$1 == "MemTotal:" { print $2; exit }' /proc/meminfo 2> /dev/null || true)
+  [[ "$mem_kib" =~ ^[0-9]+$ ]] || return 0
+
+  if ((mem_kib / 1024 < min_mib)); then
+    warn "This server has $((mem_kib / 1024)) MiB RAM; Tor recommends at least ${min_mib} MiB for this relay type."
+  else
+    success "Memory: $((mem_kib / 1024)) MiB (recommended minimum ${min_mib} MiB)."
   fi
 }
 
@@ -4371,6 +5041,7 @@ restart_and_verify_tor() {
   else
     die "${TOR_SERVICE} is not active. Check: journalctl -u ${TOR_SERVICE} -n 100 --no-pager"
   fi
+  check_family_logs "$restart_since"
 
   if command_exists ss; then
     if ss -H -ltn | awk '{ print $4 }' | grep -Eq "(^|:|\\])${OR_PORT}$"; then
@@ -4420,6 +5091,7 @@ apply_changes() {
     configure_unattended_upgrades
   fi
 
+  setup_relay_family
   configure_torrc
   configure_firewall
   restart_and_verify_tor
@@ -4447,13 +5119,24 @@ print_next_steps() {
     printf '  systemctl status unbound --no-pager\n'
     printf '  getent hosts deb.torproject.org\n'
   fi
+  if ((CONFIGURE_METRICS_PORT)); then
+    printf '  curl -s http://%s/metrics | grep -E "^tor_relay_load"\n' "$METRICS_PORT_ADDRESS"
+  fi
   printf '\n%s\n' "Relay Search usually shows a new relay after about 3 hours:"
   printf '  https://metrics.torproject.org/rs.html#search/%s\n' "$RELAY_NICKNAME"
   printf '\n%s\n' "Remember:"
   printf '  - Keep inbound TCP %s open in any VPS provider/cloud firewall.\n' "$OR_PORT"
   printf '  - New relays ramp up gradually; Guard usage can take time and stable uptime.\n'
-  printf '  - If you run multiple relays, use the existing relay tools to keep MyFamily synced.\n'
-  printf '  - Consider backing up /var/lib/tor/keys after the relay is running.\n'
+  if valid_family_id "$FAMILY_ID"; then
+    printf '  - FamilyId %s: copy the family key to each of your relays (operator console > Relay family > Share).\n' "$FAMILY_ID"
+  else
+    printf '  - If you add more relays later, create a family key from the operator console.\n'
+  fi
+  if [[ -n "$CONTACT_INFO_URL" ]]; then
+    printf '  - Publish your FamilyId at https://%s/.well-known/tor-relay/ed25519-family-id.txt for the CIISS url proof.\n' \
+      "$(url_domain "$CONTACT_INFO_URL")"
+  fi
+  printf '  - Back up %s after the relay is running (identity and family keys).\n' "$(tor_family_key_directory)"
   if [[ "$RELAY_MODE" == "exit" ]]; then
     printf '  - Keep provider, reverse DNS/WHOIS, and abuse-contact handling aligned with exit operation.\n'
   fi
@@ -4492,7 +5175,7 @@ main() {
   collect_relay_identity
   collect_ipv6
   collect_exit_options
-  collect_initial_myfamily
+  collect_relay_family
   collect_bandwidth
   collect_maintenance_options
   show_summary

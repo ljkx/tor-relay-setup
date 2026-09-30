@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+### Added
+
+- **Relay families with FamilyId keys (Tor 0.4.9 "Happy Families").** Guided setup can create a family key with `tor --keygen-family` or import one copied from another relay. The key is installed `0600` for `debian-tor` in the Tor key directory, and `FamilyId` is written to torrc. The operator console gains a *Relay family* menu (status, create/rotate, import, share instructions, remove), and the old MyFamily editor stays available as a legacy option.
+- Because `tor --verify-config` does not check family keys, the script verifies that every `FamilyId` has an installed key. It also reports family warnings Tor logs after a restart.
+- Guided **CIISS v3 ContactInfo** builder (`email:… url:… proof:uri-familyid-ed25519 hoster:… ciissversion:3`), including where to publish the family ID for the `url` proof. Free-form ContactInfo is still available.
+- Optional **MetricsPort** on `127.0.0.1:9035` with `MetricsPortPolicy accept 127.0.0.1`, in both guided setup and the configuration editor.
+- Installing or updating tor now refuses versions older than **0.4.9**, which the directory authorities reject. The health check flags old versions too.
+- Warns when the server has less RAM than the Tor Project minimum for the chosen relay type (512 MiB, or 1.5 GiB for exits).
+- Directory status shows the family IDs published in Onionoo.
+
+### Changed
+
+- Toggling `Sandbox` in the configuration editor restarts Tor instead of reloading it, because Tor rejects Sandbox changes on reload.
+- Identity-key backups note that they include family keys.
+
 ### Fixed
 
 - ORPort reachability checks now recognise the self-test notices of Tor 0.4.5 and later, which include the tested address. Previously a reachable relay was always reported as "not verified".
