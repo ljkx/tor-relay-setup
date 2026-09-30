@@ -61,14 +61,28 @@ verify_variant() {
   verify_tor_config_file "$output"
 }
 
+section "Family key"
+# Real `tor --keygen-family`, installed into the package's key directory.
+generate_family_key ci-family
+keys_dir=$(tor_family_key_directory)
+key_file="${keys_dir}/ci-family.secret_family_key"
+family_key_file_valid "$key_file" || die "Generated family key is not valid: ${key_file}"
+[[ "$(stat -c '%U %a' "$key_file")" == "debian-tor 600" ]] \
+  || die "Family key has unexpected owner/mode: $(stat -c '%U %a' "$key_file")"
+family_key_installed_for_id "$FAMILY_ID" || die "FamilyId ${FAMILY_ID} has no installed key."
+success "Family key ${key_file} (FamilyId ${FAMILY_ID})"
+
 section "torrc variants"
 RELAY_NICKNAME="CiGuard"
-CONTACT_INFO="email:ci[]example.org ciissversion:2"
+CONTACT_INFO=$(build_ciiss_contact ci@example.org https://example.org)
 OR_PORT="9001"
 RELAY_MODE="guard"
 ENABLE_TOR_SANDBOX=1
+CONFIGURE_METRICS_PORT=1
 reset_bandwidth_config
-verify_variant guard
+verify_variant guard-family-metrics
+CONFIGURE_METRICS_PORT=0
+FAMILY_ID=""
 
 MONTHLY_TRAFFIC_GBYTES=$(parse_traffic_to_gbytes 10TB)
 MONTHLY_TRAFFIC_USABLE_GBYTES=$((MONTHLY_TRAFFIC_GBYTES * 90 / 100))
