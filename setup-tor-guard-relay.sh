@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+# Tests source this file with TOR_RELAY_SETUP_SOURCE_ONLY=1 to reach the
+# helpers; strict mode and traps are only installed for real runs.
+if [[ "${TOR_RELAY_SETUP_SOURCE_ONLY:-0}" != "1" ]]; then
+  set -Eeuo pipefail
+fi
 
 SCRIPT_NAME="${0##*/}"
 case "$SCRIPT_NAME" in
@@ -133,9 +137,11 @@ on_interrupt() {
   exit 130
 }
 
-trap cleanup EXIT
-trap 'on_error "$LINENO"' ERR
-trap on_interrupt INT TERM
+install_traps() {
+  trap cleanup EXIT
+  trap 'on_error "$LINENO"' ERR
+  trap on_interrupt INT TERM
+}
 
 print_help() {
   cat <<EOF
@@ -614,7 +620,7 @@ run_tui_command() {
   return "$exit_code"
 }
 
-run() {
+run_cmd() {
   local description=$1
   local exit_code
   shift
@@ -699,8 +705,8 @@ install_fzf_for_current_run() {
     check_path_capacity /tmp 65536 512
   fi
 
-  run "Updating apt package lists for fzf" env DEBIAN_FRONTEND=noninteractive apt-get update
-  run "Installing fzf selector interface" env DEBIAN_FRONTEND=noninteractive apt-get install -y fzf
+  run_cmd "Updating apt package lists for fzf" env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_cmd "Installing fzf selector interface" env DEBIAN_FRONTEND=noninteractive apt-get install -y fzf
 
   if ! command_exists fzf; then
     die "fzf installation completed, but fzf is still not available in PATH."
@@ -3006,7 +3012,7 @@ reload_or_restart_tor() {
     return 0
   fi
 
-  if run "Reloading ${TOR_SERVICE}" systemctl reload "$TOR_SERVICE"; then
+  if run_cmd "Reloading ${TOR_SERVICE}" systemctl reload "$TOR_SERVICE"; then
     success "Reloaded ${TOR_SERVICE}."
   else
     warn "Reload failed or is unsupported; restarting ${TOR_SERVICE} instead."
@@ -3187,8 +3193,8 @@ service_control_menu() {
         fi
         ;;
       2)
-        run "Enabling ${TOR_SERVICE}" systemctl enable "$TOR_SERVICE"
-        run "Starting ${TOR_SERVICE}" systemctl start "$TOR_SERVICE"
+        run_cmd "Enabling ${TOR_SERVICE}" systemctl enable "$TOR_SERVICE"
+        run_cmd "Starting ${TOR_SERVICE}" systemctl start "$TOR_SERVICE"
         ;;
       3)
         verify_tor_config
@@ -3199,12 +3205,12 @@ service_control_menu() {
         ;;
       5)
         if ask_yes_no "Stop Tor now? This relay will go offline." "no"; then
-          run "Stopping ${TOR_SERVICE}" systemctl stop "$TOR_SERVICE"
+          run_cmd "Stopping ${TOR_SERVICE}" systemctl stop "$TOR_SERVICE"
         fi
         ;;
       6)
         if ask_yes_no "Disable Tor autostart? The relay will not start after reboot." "no"; then
-          run "Disabling ${TOR_SERVICE}" systemctl disable "$TOR_SERVICE"
+          run_cmd "Disabling ${TOR_SERVICE}" systemctl disable "$TOR_SERVICE"
         fi
         ;;
       7|"")
@@ -3415,7 +3421,7 @@ package_tools_menu() {
           fzf_was_installed=1
         fi
         check_apt_capacity
-        run "Installing fzf" env DEBIAN_FRONTEND=noninteractive apt-get install -y fzf
+        run_cmd "Installing fzf" env DEBIAN_FRONTEND=noninteractive apt-get install -y fzf
         if ((DRY_RUN)); then
           info "Would record that this script installed fzf."
         elif command_exists fzf && ((fzf_was_installed == 0)); then
@@ -3635,7 +3641,7 @@ cleanup_script_traces() {
 
   if selection_contains fzf "${selections[@]}"; then
     if ask_yes_no "Purge fzf now? Skip this if you use fzf for anything else." "no"; then
-      run "Purging fzf" env DEBIAN_FRONTEND=noninteractive apt-get purge -y fzf
+      run_cmd "Purging fzf" env DEBIAN_FRONTEND=noninteractive apt-get purge -y fzf
     fi
   fi
 
@@ -3998,8 +4004,8 @@ confirm_apply() {
 }
 
 install_repository_prerequisites() {
-  run "Updating apt package lists" env DEBIAN_FRONTEND=noninteractive apt-get update
-  run "Installing apt repository prerequisites" \
+  run_cmd "Updating apt package lists" env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_cmd "Installing apt repository prerequisites" \
     env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates gnupg wget
 }
 
@@ -4016,10 +4022,10 @@ configure_tor_repository() {
     print_command wget -qO- "${TOR_APT_BASE_URL}/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc"
     print_command gpg --dearmor --output "$TOR_KEYRING_PATH"
   else
-    run "Fetching Tor Project package signing key" \
+    run_cmd "Fetching Tor Project package signing key" \
       wget -qO "$ascii_key" "${TOR_APT_BASE_URL}/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc"
     verify_tor_signing_key_file "$ascii_key"
-    run "Building Tor Project apt keyring" gpg --dearmor --yes --output "$binary_key" "$ascii_key"
+    run_cmd "Building Tor Project apt keyring" gpg --dearmor --yes --output "$binary_key" "$ascii_key"
   fi
 
   install_file_if_changed "$binary_key" "$TOR_KEYRING_PATH" "0644"
@@ -4031,7 +4037,7 @@ configure_tor_repository() {
 }
 
 install_tor_package() {
-  run "Updating apt package lists" env DEBIAN_FRONTEND=noninteractive apt-get update
+  run_cmd "Updating apt package lists" env DEBIAN_FRONTEND=noninteractive apt-get update
 
   if ((DRY_RUN)); then
     info "Would verify apt candidate for tor comes from ${TOR_APT_BASE_URL}."
@@ -4047,10 +4053,10 @@ install_tor_package() {
     die "The selected apt candidate for tor does not appear to come from ${TOR_APT_BASE_URL}. Check apt-cache policy tor before continuing."
   fi
 
-  run "Installing Tor from apt" env DEBIAN_FRONTEND=noninteractive apt-get install -y tor
+  run_cmd "Installing Tor from apt" env DEBIAN_FRONTEND=noninteractive apt-get install -y tor
 
   if apt_package_available deb.torproject.org-keyring; then
-    run "Installing Tor Project keyring package" \
+    run_cmd "Installing Tor Project keyring package" \
       env DEBIAN_FRONTEND=noninteractive apt-get install -y deb.torproject.org-keyring
   else
     warn "deb.torproject.org-keyring is not available for '${OS_CODENAME}' yet."
@@ -4061,7 +4067,7 @@ install_tor_package() {
 install_nyx_package() {
   ((INSTALL_NYX)) || return 0
 
-  run "Installing Nyx relay monitor" env DEBIAN_FRONTEND=noninteractive apt-get install -y nyx
+  run_cmd "Installing Nyx relay monitor" env DEBIAN_FRONTEND=noninteractive apt-get install -y nyx
 }
 
 install_fzf_package() {
@@ -4072,7 +4078,7 @@ install_fzf_package() {
     fzf_was_installed=1
   fi
 
-  run "Installing fzf searchable selector" env DEBIAN_FRONTEND=noninteractive apt-get install -y fzf
+  run_cmd "Installing fzf searchable selector" env DEBIAN_FRONTEND=noninteractive apt-get install -y fzf
   if ((DRY_RUN)); then
     info "Would record that this script installed fzf."
   elif command_exists fzf && ((fzf_was_installed == 0)); then
@@ -4102,11 +4108,11 @@ configure_exit_dns() {
     warn "This script will replace it only because exit relay DNS needs a local caching resolver."
   fi
 
-  run "Installing Unbound local resolver" env DEBIAN_FRONTEND=noninteractive apt-get install -y unbound
+  run_cmd "Installing Unbound local resolver" env DEBIAN_FRONTEND=noninteractive apt-get install -y unbound
   if command_exists unbound-checkconf; then
-    run "Checking Unbound configuration" unbound-checkconf
+    run_cmd "Checking Unbound configuration" unbound-checkconf
   fi
-  run "Enabling and starting Unbound" systemctl enable --now unbound
+  run_cmd "Enabling and starting Unbound" systemctl enable --now unbound
 
   if ((DRY_RUN)); then
     info "Would verify Unbound service state and switch ${RESOLV_CONF_PATH} to nameserver 127.0.0.1"
@@ -4137,7 +4143,7 @@ configure_exit_dns() {
 
   if ((LOCK_RESOLV_CONF)); then
     if command_exists chattr; then
-      run "Locking ${RESOLV_CONF_PATH} with chattr +i" chattr +i "$RESOLV_CONF_PATH"
+      run_cmd "Locking ${RESOLV_CONF_PATH} with chattr +i" chattr +i "$RESOLV_CONF_PATH"
     else
       warn "chattr is not available; ${RESOLV_CONF_PATH} was not locked."
     fi
@@ -4151,7 +4157,7 @@ configure_unattended_upgrades() {
   build_unattended_tor_config "$unattended_file"
   build_auto_upgrades_config "$auto_file"
 
-  run "Installing unattended-upgrades packages" \
+  run_cmd "Installing unattended-upgrades packages" \
     env DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades apt-listchanges
 
   install_file_if_changed "$unattended_file" "$UNATTENDED_TOR_PATH" "0644"
@@ -4172,7 +4178,7 @@ configure_hostname() {
 
   build_hosts_file "$hosts_file"
   backup_file /etc/hostname
-  run "Setting system hostname to ${NEW_HOSTNAME}" hostnamectl set-hostname "$NEW_HOSTNAME"
+  run_cmd "Setting system hostname to ${NEW_HOSTNAME}" hostnamectl set-hostname "$NEW_HOSTNAME"
   install_file_if_changed "$hosts_file" /etc/hosts "0644"
   success "System hostname configured. New SSH sessions should show ${NEW_HOSTNAME}."
 }
@@ -4185,21 +4191,21 @@ configure_ufw_firewall() {
   local ssh_port
 
   if ((INSTALL_UFW)); then
-    run "Updating apt package lists before installing UFW" env DEBIAN_FRONTEND=noninteractive apt-get update
-    run "Installing UFW" env DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
+    run_cmd "Updating apt package lists before installing UFW" env DEBIAN_FRONTEND=noninteractive apt-get update
+    run_cmd "Installing UFW" env DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
   fi
 
   ((DRY_RUN)) || command_exists ufw || die "ufw is not installed."
 
   if [[ "$FIREWALL_STATE" != "active" ]]; then
     for ssh_port in $SSH_PORTS_FOR_UFW; do
-      run "Allowing SSH TCP ${ssh_port} through UFW" ufw allow "${ssh_port}/tcp" comment "SSH"
+      run_cmd "Allowing SSH TCP ${ssh_port} through UFW" ufw allow "${ssh_port}/tcp" comment "SSH"
     done
   fi
-  run "Allowing TCP ${OR_PORT} through UFW" ufw allow "${OR_PORT}/tcp" comment "Tor relay ORPort"
+  run_cmd "Allowing TCP ${OR_PORT} through UFW" ufw allow "${OR_PORT}/tcp" comment "Tor relay ORPort"
 
   if ((ENABLE_UFW_AFTER_RULES)); then
-    run "Enabling UFW" ufw --force enable
+    run_cmd "Enabling UFW" ufw --force enable
   elif [[ "$FIREWALL_STATE" != "active" ]]; then
     warn "UFW rules were added, but UFW is inactive."
   fi
@@ -4217,8 +4223,8 @@ configure_firewall() {
         warn "firewalld is inactive. Skipping firewall change."
         return 0
       fi
-      run "Allowing TCP ${OR_PORT} through firewalld" firewall-cmd --permanent --add-port="${OR_PORT}/tcp"
-      run "Reloading firewalld" firewall-cmd --reload
+      run_cmd "Allowing TCP ${OR_PORT} through firewalld" firewall-cmd --permanent --add-port="${OR_PORT}/tcp"
+      run_cmd "Reloading firewalld" firewall-cmd --reload
       ;;
     nftables)
       if ! nft list chain inet filter input >/dev/null 2>&1; then
@@ -4231,7 +4237,7 @@ configure_firewall() {
       elif nft_rule_exists; then
         success "nftables rule already present for TCP ${OR_PORT}"
       else
-        run "Allowing TCP ${OR_PORT} through nftables" \
+        run_cmd "Allowing TCP ${OR_PORT} through nftables" \
           nft add rule inet filter input tcp dport "$OR_PORT" accept comment "Tor relay ORPort ${OR_PORT}"
       fi
       ;;
@@ -4248,10 +4254,10 @@ verify_tor_config_file() {
     # Mirror the ExecStartPre check of Debian's tor@default.service so the
     # candidate is validated with the same defaults (User, DataDirectory, ...).
     if [[ -r "$TOR_SERVICE_DEFAULTS_TORRC" ]]; then
-      run "Verifying Tor configuration" \
+      run_cmd "Verifying Tor configuration" \
         tor --defaults-torrc "$TOR_SERVICE_DEFAULTS_TORRC" -f "$config_file" --RunAsDaemon 0 --verify-config
     else
-      run "Verifying Tor configuration" tor -f "$config_file" --verify-config
+      run_cmd "Verifying Tor configuration" tor -f "$config_file" --verify-config
     fi
   else
     warn "tor command not found yet; cannot verify torrc syntax."
@@ -4342,8 +4348,8 @@ restart_and_verify_tor() {
   verify_tor_config
 
   restart_since=$(date '+%Y-%m-%d %H:%M:%S')
-  run "Enabling ${TOR_SERVICE}" systemctl enable "$TOR_SERVICE"
-  run "Restarting ${TOR_SERVICE}" systemctl restart "$TOR_SERVICE"
+  run_cmd "Enabling ${TOR_SERVICE}" systemctl enable "$TOR_SERVICE"
+  run_cmd "Restarting ${TOR_SERVICE}" systemctl restart "$TOR_SERVICE"
 
   if ((DRY_RUN)); then
     info "Would verify ${TOR_SERVICE} status, ORPort listener, and Tor ORPort self-test logs."
@@ -4489,5 +4495,6 @@ main() {
 }
 
 if [[ "${TOR_RELAY_SETUP_SOURCE_ONLY:-0}" != "1" ]]; then
+  install_traps
   main "$@"
 fi

@@ -2,31 +2,94 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  schedule:
+    # Weekly run catches Tor apt repository, key, or suite changes early.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  shell:
-    name: Bash checks
-    runs-on: ubuntu-latest
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: scripts/install-dev-tools.sh
+      - name: Lint
+        run: make lint
 
-      - name: Install ShellCheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+  test:
+    name: Tests (host)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: scripts/install-dev-tools.sh
+      - name: Unit, stubbed-system, and dry-run suites
+        run: make test
 
-      - name: Bash syntax check
-        run: bash -n setup-tor-guard-relay.sh
+  distro:
+    name: ${{ matrix.image }} (${{ matrix.runner == 'ubuntu-24.04-arm' && 'arm64' || 'amd64' }})
+    needs: [lint, test]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04]
+        image:
+          - debian:bookworm
+          - debian:trixie
+          - ubuntu:jammy
+          - ubuntu:noble
+          - ubuntu:resolute
+        include:
+          - runner: ubuntu-24.04-arm
+            image: debian:trixie
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        if: runner.arch == 'X64'
+        run: scripts/install-dev-tools.sh
+      - name: Dry-run flow inside the container
+        if: runner.arch == 'X64'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: docker run --rm -v "$PWD:/src" -w /src "$IMAGE" .tools/bin/bats tests/e2e.bats
+      - name: Real Tor apt setup and tor --verify-config
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: docker run --rm -v "$PWD:/src:ro" -w /src "$IMAGE" tests/integration/tor-repo.sh
 
-      - name: ShellCheck
-        run: shellcheck -S warning -e SC2034,SC2178 setup-tor-guard-relay.sh tests/test-functions.bash
-
-      - name: Function tests
-        run: |
-          bash tests/test-functions.bash
-          python3 -m py_compile scripts/render-readme-screenshots.py
-
-      - name: Smoke checks
-        run: |
-          ./setup-tor-guard-relay.sh --version
-          ./setup-tor-guard-relay.sh --help >/tmp/tor-relay-setup-help.txt
-          grep -Fq -- '--dry-run' /tmp/tor-relay-setup-help.txt
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          advanced-security: false

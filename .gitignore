@@ -8,3 +8,5 @@ Thumbs.db
 release-assets/
 __pycache__/
 *.pyc
+.tools/
+dist/
