@@ -74,6 +74,7 @@ ENABLE_TOR_SANDBOX=1
 INITIAL_MYFAMILY_AFTER_SETUP=0
 
 TORRC_PATH="/etc/tor/torrc"
+TOR_SERVICE_DEFAULTS_TORRC="/usr/share/tor/tor-service-defaults-torrc"
 TOR_APT_BASE_URL="https://deb.torproject.org/torproject.org"
 TOR_SIGNING_KEY_FINGERPRINT="A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89"
 TOR_SOURCES_PATH="/etc/apt/sources.list.d/tor.sources"
@@ -378,8 +379,11 @@ verify_tor_signing_key_file() {
     return 0
   fi
 
+  # Print every primary-key fingerprint. Exactly one is allowed, so a key file
+  # with an extra injected key cannot slip into the apt keyring.
   fingerprint=$(gpg --show-keys --with-colons --fingerprint "$key_file" 2>/dev/null \
-    | awk -F: '$1 == "fpr" { print toupper($10); exit }')
+    | awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print toupper($10); want = 0 }' \
+    | paste -sd ' ' -)
 
   if [[ "$fingerprint" != "$TOR_SIGNING_KEY_FINGERPRINT" ]]; then
     die "Unexpected Tor Project signing key fingerprint '${fingerprint:-unreadable}'. Expected ${TOR_SIGNING_KEY_FINGERPRINT}."
@@ -506,7 +510,9 @@ show_file_panel() {
   if tui_available; then
     display_file=$(mktemp_in_workspace)
     nl -ba -w4 -s '  ' "$file" > "$display_file"
+    # --ansi renders the bold/colour codes the review summary contains.
     env FZF_DEFAULT_OPTS= fzf \
+      --ansi \
       --height=90% \
       --reverse \
       --border \
@@ -1178,14 +1184,17 @@ parse_traffic_to_gbytes() {
   number=${BASH_REMATCH[1]}
   unit=${BASH_REMATCH[3]}
 
+  # Providers bill in decimal units (1 TB = 10^12 bytes), while Tor's
+  # AccountingMax "GBytes" are binary (2^30 bytes). Treat K/M/G/T and KB/MB/
+  # GB/TB as decimal, and KiB/MiB/GiB/TiB plus Tor's KBytes/GBytes spelling as
+  # binary, then return whole binary GBytes (rounded down, never up).
   awk -v number="$number" -v unit="$unit" '
     BEGIN {
-      multiplier = 0
-      if (unit ~ /^K/) multiplier = 1 / (1024 * 1024)
-      else if (unit ~ /^M/) multiplier = 1 / 1024
-      else if (unit ~ /^G/) multiplier = 1
-      else if (unit ~ /^T/) multiplier = 1024
-      value = number * multiplier
+      prefix = substr(unit, 1, 1)
+      power = index("KMGT", prefix)
+      base = (unit ~ /^.(IB|BYTE|BYTES)$/) ? 1024 : 1000
+      bytes = number * (base ^ power)
+      value = bytes / (1024 ^ 3)
       if (value < 1) exit 1
       printf "%d", value
     }'
@@ -1521,12 +1530,14 @@ list_ipv6_candidates() {
 }
 
 check_ipv6_connectivity() {
+  # IPv6 directory authorities from tor's src/app/config/auth_dirs.inc
+  # (tor26, gabelmoo, dannenberg, maatuska, bastet).
   local authorities=(
-    "2001:858:2:2:aabb:0:563b:1526"
-    "2620:13:4000:6000::1000:118"
-    "2001:67c:289c::9"
-    "2001:678:558:1000::244"
+    "2a02:16a8:662:2203::1"
     "2001:638:a000:4140::ffff:189"
+    "2001:678:558:1000::244"
+    "2001:67c:289c::9"
+    "2620:13:4000:6000::1000:118"
   )
   local ping_cmd=()
   local address
@@ -1863,7 +1874,9 @@ calculate_steady_monthly_limits() {
     die "The monthly budget is too small after headroom and accounting style."
   fi
 
-  rate_kbytes=$((per_direction_gbytes * 1024 * 1024 / 2592000))
+  # Pace over the longest possible month (31 days) so long months cannot
+  # exhaust the quota early and trigger AccountingMax hibernation.
+  rate_kbytes=$((per_direction_gbytes * 1024 * 1024 / (31 * 86400)))
   if ((rate_kbytes < 75)); then
     warn "That budget calculates to ${rate_kbytes} KBytes/s, below Tor's relay minimum of 75 KBytes/s."
     return 1
@@ -2086,9 +2099,12 @@ build_unattended_tor_config() {
   local output=$1
   {
     printf '// Managed by %s. Enables unattended upgrades for Tor Project packages.\n' "$SCRIPT_NAME"
+    # Single quotes are intentional: ${distro_*} are unattended-upgrades macros.
+    # shellcheck disable=SC2016
     if [[ "$OS_ID" == "debian" ]]; then
+      # Since bullseye the Debian security suite is "<codename>-security".
       printf 'Unattended-Upgrade::Origins-Pattern {\n'
-      printf '    "origin=Debian,codename=${distro_codename},label=Debian-Security";\n'
+      printf '    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";\n'
       printf '    "origin=TorProject";\n'
       printf '};\n'
     else
@@ -2097,8 +2113,6 @@ build_unattended_tor_config() {
       printf '    "TorProject:${distro_codename}";\n'
       printf '};\n'
     fi
-    printf 'Unattended-Upgrade::Package-Blacklist {\n'
-    printf '};\n'
   } > "$output"
 }
 
@@ -3606,8 +3620,12 @@ cleanup_script_traces() {
     token=$(prompt_line "Type DELETE SCRIPT TRACES to confirm removing script files")
     if [[ "$token" != "DELETE SCRIPT TRACES" ]]; then
       warn "Script file/repo deletion skipped."
-      selections=("${selections[@]/repo/}")
-      selections=("${selections[@]/script/}")
+      # Filter whole entries; pattern substitution would also mangle "reports".
+      local -a kept=()
+      for choice in "${selections[@]}"; do
+        [[ "$choice" == "repo" || "$choice" == "script" ]] || kept+=("$choice")
+      done
+      selections=("${kept[@]}")
     fi
   fi
 
@@ -3982,7 +4000,7 @@ confirm_apply() {
 install_repository_prerequisites() {
   run "Updating apt package lists" env DEBIAN_FRONTEND=noninteractive apt-get update
   run "Installing apt repository prerequisites" \
-    env DEBIAN_FRONTEND=noninteractive apt-get install -y apt-transport-https ca-certificates gnupg wget
+    env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates gnupg wget
 }
 
 configure_tor_repository() {
@@ -4227,7 +4245,14 @@ verify_tor_config_file() {
   local config_file=$1
 
   if command_exists tor; then
-    run "Verifying Tor configuration syntax" tor --verify-config -f "$config_file"
+    # Mirror the ExecStartPre check of Debian's tor@default.service so the
+    # candidate is validated with the same defaults (User, DataDirectory, ...).
+    if [[ -r "$TOR_SERVICE_DEFAULTS_TORRC" ]]; then
+      run "Verifying Tor configuration" \
+        tor --defaults-torrc "$TOR_SERVICE_DEFAULTS_TORRC" -f "$config_file" --RunAsDaemon 0 --verify-config
+    else
+      run "Verifying Tor configuration" tor -f "$config_file" --verify-config
+    fi
   else
     warn "tor command not found yet; cannot verify torrc syntax."
   fi
@@ -4235,6 +4260,27 @@ verify_tor_config_file() {
 
 verify_tor_config() {
   verify_tor_config_file "$TORRC_PATH"
+}
+
+# Tor 0.4.5+ includes the tested address in these notices, for example
+# "Self-testing indicates your ORPort 203.0.113.5:9001 is reachable from the
+# outside. Excellent." (src/feature/relay/selftest.c). Older releases omitted
+# the address, so both shapes are accepted. Pass "ipv6" to match only the
+# bracketed IPv6 ORPort notice.
+orport_self_test_succeeded() {
+  local family=${1:-any}
+  local address_pattern='([^ ]+ )?'
+
+  if [[ "$family" == "ipv6" ]]; then
+    address_pattern='\[[0-9A-Fa-f:.]+\]:[0-9]+ '
+  fi
+  grep -Eq "Self-testing indicates your ORPort ${address_pattern}is reachable from the outside\\. Excellent\\."
+}
+
+# Current wording lives in src/feature/relay/relay_periodic.c; the older
+# "confirm that its ORPort is reachable" wording is kept for old relays.
+orport_self_test_failed() {
+  grep -Eq "Your server has not managed to confirm (reachability for its ORPort|that its ORPort is reachable)"
 }
 
 check_tor_orport_self_test() {
@@ -4263,12 +4309,15 @@ check_tor_orport_self_test() {
   while true; do
     log_output=$(journalctl -u "$TOR_SERVICE" --since "$since_time" --no-pager 2>/dev/null || true)
 
-    if grep -Fq "Self-testing indicates your ORPort is reachable from the outside. Excellent." <<< "$log_output"; then
+    if orport_self_test_succeeded <<< "$log_output"; then
       success "Tor reports the ORPort is reachable from outside."
+      if orport_self_test_succeeded ipv6 <<< "$log_output"; then
+        success "Tor also reports the IPv6 ORPort is reachable from outside."
+      fi
       return 0
     fi
 
-    if grep -Fq "Your server has not managed to confirm that its ORPort is reachable" <<< "$log_output"; then
+    if orport_self_test_failed <<< "$log_output"; then
       warn "Tor has not confirmed external ORPort reachability yet."
       warn "Check local/cloud firewall rules for TCP ${OR_PORT}, then watch: journalctl -u ${TOR_SERVICE} -f"
       return "$require_success"
