@@ -35,8 +35,8 @@ dist: ## Build release assets and SHA256SUMS into dist/
 	install -m 0755 $(SCRIPT) dist/$(SCRIPT)
 	cd dist && sha256sum $(SCRIPT) > SHA256SUMS && sha256sum --check SHA256SUMS
 
-render-screenshots: ## Re-render README screenshots from /tmp/tor-relay-dry-run.txt
-	python3 scripts/render-readme-screenshots.py /tmp/tor-relay-dry-run.txt
+render-screenshots: ## Re-render README screenshots from a scripted dry run
+	scripts/render-screenshots.sh
 
 clean: ## Remove build output and the local toolchain
 	rm -rf dist .tools

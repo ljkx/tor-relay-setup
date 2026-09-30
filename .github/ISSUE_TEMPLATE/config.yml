@@ -1,5 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: Official Tor relay documentation
+  - name: Report a security vulnerability
+    url: https://github.com/ljkx/tor-relay-setup/security/advisories/new
+    about: Please report vulnerabilities privately, not as public issues.
+  - name: Tor relay documentation
     url: https://community.torproject.org/relay/
-    about: Use Tor Project documentation as the authority for relay behavior.
+    about: The authority on relay behaviour and configuration.
+  - name: Tor relay operator forum
+    url: https://forum.torproject.org/c/support/relay-operator/17
+    about: Questions about running relays in general, not about this tool.

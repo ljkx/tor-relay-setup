@@ -11,7 +11,7 @@ case "$SCRIPT_NAME" in
     SCRIPT_NAME="setup-tor-guard-relay.sh"
     ;;
 esac
-VERSION="1.0.0-beta.4"
+VERSION="2.0.0-beta.1"
 DRY_RUN=0
 CLEANUP_MODE=0
 USE_FZF=0

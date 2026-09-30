@@ -1,15 +1,2 @@
-*.sh text eol=lf
-*.bash text eol=lf
-*.py text eol=lf
-*.md text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
+* text=auto eol=lf
 *.svg text eol=lf
-.editorconfig text eol=lf
-CHANGELOG.md text eol=lf
-CONTRIBUTING.md text eol=lf
-SECURITY.md text eol=lf
-Makefile text eol=lf
-LICENSE text eol=lf
-.gitignore text eol=lf
-.gitattributes text eol=lf

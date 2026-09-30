@@ -26,7 +26,8 @@ make fmt     # apply shfmt formatting
 | Target | What it runs |
 | --- | --- |
 | `make lint` | `bash -n`, ShellCheck (config in `.shellcheckrc`), `shfmt --diff` (style in `.editorconfig`) |
-| `make test` | `tests/unit.bats`, `tests/system.bats` (PATH stubs), `tests/e2e.bats` (scripted `--dry-run --plain` sessions) |
+| `make test` | `tests/unit.bats`, `tests/relay2026.bats` (families, CIISS, MetricsPort, version floor), `tests/system.bats` (PATH stubs), `tests/e2e.bats` (scripted `--dry-run --plain` sessions) |
+| `make render-screenshots` | Re-renders the README screenshots from `docs/assets/screenshot-answers.txt` |
 | `make integration` | `tests/integration/tor-repo.sh` in a Debian container: real Tor apt setup and `tor --verify-config` of generated torrc files |
 
 CI runs the same targets, then repeats the dry-run and integration suites on Debian 12/13 and Ubuntu 22.04/24.04/26.04 (plus arm64).

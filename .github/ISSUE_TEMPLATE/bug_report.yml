@@ -1,50 +1,66 @@
 name: Bug report
-description: Report a problem with setup, repair, cleanup, or relay operation checks.
+description: Something in setup, the operator console, or cleanup behaves incorrectly.
 title: "[Bug]: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing. Please remove private server details before submitting.
+        Thanks for reporting. **Security issues go through [private reporting](https://github.com/ljkx/tor-relay-setup/security/advisories/new), not here.**
+        Remove private IPs, private emails, keys, and credentials before submitting.
   - type: input
     id: version
     attributes:
       label: Script version
-      placeholder: "setup-tor-guard-relay.sh 1.0.0-beta.4"
+      description: Output of `./setup-tor-guard-relay.sh --version`
+      placeholder: "setup-tor-guard-relay.sh 2.0.0-beta.1"
     validations:
       required: true
   - type: input
+    id: tor-version
+    attributes:
+      label: tor version
+      description: First line of `tor --version`, or "not installed"
+      placeholder: "Tor version 0.4.9.13."
+  - type: input
     id: system
     attributes:
-      label: Distro and codename
-      placeholder: "Ubuntu 24.04 noble, amd64"
+      label: Distribution, codename, architecture
+      placeholder: "Debian 13 trixie, arm64"
     validations:
       required: true
   - type: dropdown
-    id: mode
+    id: area
     attributes:
-      label: Relay mode
+      label: Where did it happen?
       options:
-        - Guard / middle
-        - Exit
-        - Existing relay console
-        - Cleanup mode
+        - Guided setup (guard/middle)
+        - Guided setup (exit)
         - Dry run
+        - Operator console — relay family / MyFamily
+        - Operator console — other menu
+        - Uninstall / cleanup
+        - Release download / verification
     validations:
       required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      options:
+        - fzf
+        - plain (--plain or fzf not installed)
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
-      description: What did you expect the script to do?
+      label: Expected behaviour
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
-      description: Paste the relevant output. Remove private addresses, private emails, and credentials.
+      label: Actual behaviour and output
+      description: Paste the relevant output. Console → Command logs shows captured command output.
       render: text
     validations:
       required: true
@@ -52,12 +68,12 @@ body:
     id: checks
     attributes:
       label: Checks already run
-      description: Include any relevant `--dry-run`, `journalctl`, `systemctl`, `tor --verify-config`, or Relay Search checks.
+      description: For example `tor --verify-config -f /etc/tor/torrc`, `journalctl -u tor@default -n 50`, `systemctl status tor@default`, or Relay Search.
       render: text
   - type: checkboxes
     id: safety
     attributes:
-      label: Safety confirmation
+      label: Privacy
       options:
-        - label: I removed secrets, private keys, credentials, and private server details from this report.
+        - label: I removed keys, credentials, and private server details from this report.
           required: true
