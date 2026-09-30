@@ -16,6 +16,16 @@ All notable changes to this project are documented here.
 - The fzf review panel renders colours instead of showing raw escape codes.
 - Dropped the obsolete `apt-transport-https` prerequisite.
 
+### Development
+
+- Pinned, checksum-verified toolchain (`scripts/install-dev-tools.sh`): ShellCheck 0.11.0, shfmt 3.14.1, bats-core 1.14.0.
+- Tests moved to bats: unit, stubbed-system, and scripted end-to-end dry-run suites, plus a container integration test that performs the real Tor apt setup and runs `tor --verify-config` on generated torrc files.
+- CI runs on Debian 12/13 and Ubuntu 22.04/24.04/26.04 (amd64) plus Debian 13 arm64, weekly as well as on pushes, with actions pinned by commit SHA, least-privilege tokens, and zizmor workflow auditing.
+- Tag-driven release workflow publishes the script with `SHA256SUMS` and a Sigstore-signed SLSA provenance attestation.
+- Dependabot keeps GitHub Actions current with a 7-day cooldown.
+- The script's `run` helper is now `run_cmd`, and strict mode and traps are only installed when the script runs rather than when tests source it.
+- Shell sources are formatted with shfmt.
+
 ## v1.0.0-beta.4 - 2026-05-18
 
 ### Changed

@@ -1,47 +1,41 @@
-# Release Guide
+# Release guide
 
-This is the release checklist for maintainers.
+Releases are built and published by [`.github/workflows/release.yml`](../.github/workflows/release.yml) when a `v*` tag is pushed. Maintainers only prepare the version and the tag.
 
-## Preflight
+## 1. Prepare
 
-```bash
-git status --short
-make check
-```
+1. Set `VERSION="X.Y.Z[-pre]"` near the top of `setup-tor-guard-relay.sh`.
+2. In `CHANGELOG.md`, rename **Unreleased** to `## vX.Y.Z[-pre] - YYYY-MM-DD`. The release workflow uses this section as the release notes and fails if it is missing.
+3. Run the local checks and merge through a pull request:
 
-Run a guided dry-run capture for README screenshots when UI output changes.
+   ```bash
+   make check
+   ```
 
-## Create Assets
-
-```bash
-VERSION="v1.0.0-beta.4"
-mkdir -p release-assets
-cp setup-tor-guard-relay.sh release-assets/
-(cd release-assets && sha256sum setup-tor-guard-relay.sh > SHA256SUMS)
-```
-
-Verify:
+## 2. Tag
 
 ```bash
-(cd release-assets && sha256sum -c SHA256SUMS)
+git switch main && git pull --ff-only
+git tag -s vX.Y.Z -m vX.Y.Z   # -s signs the tag; use -a if you have no signing key
+git push origin vX.Y.Z
 ```
 
-## Tag And Release
+## 3. What the workflow does
+
+1. Runs the full CI workflow (lint, tests, distro matrix, zizmor).
+2. Checks that the tag equals `VERSION` and that the changelog has a matching section.
+3. Builds `dist/setup-tor-guard-relay.sh` and `dist/SHA256SUMS` with `make dist`.
+4. Signs a SLSA build-provenance attestation for the script with `actions/attest` (Sigstore).
+5. Creates the GitHub release. Tags with a `-` suffix (for example `v2.0.0-beta.1`) become pre-releases.
+
+The job runs in the `release` environment, so you can require a reviewer in **Settings → Environments** before anything is published.
+
+## 4. Verify
 
 ```bash
-git tag -a "$VERSION" -m "$VERSION"
-git push origin main "$VERSION"
-gh release create "$VERSION" \
-  release-assets/setup-tor-guard-relay.sh \
-  release-assets/SHA256SUMS \
-  --title "$VERSION" \
-  --notes-file release-assets/RELEASE_NOTES.md \
-  --prerelease
+gh release download vX.Y.Z -R ljkx/tor-relay-setup
+sha256sum --check SHA256SUMS
+gh attestation verify setup-tor-guard-relay.sh -R ljkx/tor-relay-setup
 ```
 
-## After Release
-
-- Confirm GitHub Actions passed for the release commit.
-- Confirm release assets are uploaded.
-- Confirm README quick-start version matches the release tag.
-- Confirm the release asset checksum matches `SHA256SUMS`.
+Then confirm the README quick-start version matches the new tag.

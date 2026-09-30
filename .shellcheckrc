@@ -1,0 +1,6 @@
+# Shared by CI, `make lint`, and editor integrations.
+# SC2034: tests assign globals that the sourced script reads.
+# SC2178: Bash namerefs to arrays look like string reassignment to ShellCheck.
+disable=SC2034,SC2178
+external-sources=true
+source-path=SCRIPTDIR
