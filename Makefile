@@ -2,10 +2,10 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 SCRIPT := setup-tor-guard-relay.sh
-SHELL_FILES := $(SCRIPT) $(wildcard scripts/*.sh tests/*.bash tests/*.bats tests/integration/*.sh)
+SHELL_FILES := $(SCRIPT) $(wildcard scripts/*.sh docs/demo/*.sh tests/*.bash tests/*.bats tests/integration/*.sh)
 export PATH := $(CURDIR)/.tools/bin:$(PATH)
 
-.PHONY: help check tools lint fmt test integration dist render-screenshots clean
+.PHONY: help check tools lint fmt test integration dist demo clean
 
 help: ## Show this help
 	@awk -F ':.*## ' '/^[a-z-]+:.*## / { printf "  %-20s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -25,7 +25,6 @@ fmt: tools ## Rewrite shell files with shfmt
 
 test: tools ## Unit, stubbed-system, and end-to-end dry-run suites
 	bats --timing tests/
-	python3 -m py_compile scripts/render-readme-screenshots.py
 
 integration: ## Real Tor apt install + tor --verify-config in a Debian container
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src debian:trixie tests/integration/tor-repo.sh
@@ -35,8 +34,8 @@ dist: ## Build release assets and SHA256SUMS into dist/
 	install -m 0755 $(SCRIPT) dist/$(SCRIPT)
 	cd dist && sha256sum $(SCRIPT) > SHA256SUMS && sha256sum --check SHA256SUMS
 
-render-screenshots: ## Re-render README screenshots from a scripted dry run
-	scripts/render-screenshots.sh
+demo: tools ## Re-record docs/assets/demo.gif (needs vhs, ttyd and ffmpeg on PATH)
+	vhs docs/demo/setup.tape
 
 clean: ## Remove build output and the local toolchain
 	rm -rf dist .tools

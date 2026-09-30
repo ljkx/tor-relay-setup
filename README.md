@@ -17,7 +17,11 @@ It asks the questions a relay operator actually has to answer, shows the full pl
 
 Run it again on an existing relay and it opens an **operator console** for families, health checks, directory status, logs, backups, updates, and repairs.
 
-![Guided setup in a dry run](docs/assets/tor-relay-setup-first-run.svg)
+<p align="center">
+  <img src="docs/assets/demo.gif" width="880"
+       alt="Recorded dry run: choosing guard mode, building a CIISS ContactInfo, creating a relay family key, pacing a 10 TB monthly budget, enabling MetricsPort, and scrolling the final review with the generated torrc before confirming">
+</p>
+<p align="center"><sub>A complete <code>--dry-run</code> in the fzf interface, recorded with <a href="https://github.com/charmbracelet/vhs">VHS</a> from <a href="docs/demo/setup.tape"><code>docs/demo/setup.tape</code></a>.</sub></p>
 
 ## Quick start
 
@@ -77,8 +81,6 @@ git checkout v2.0.0-beta.1
    - *no cap*
 8. **Maintenance**: unattended upgrades, Nyx, a local MetricsPort, the firewall (UFW, firewalld, or an existing nftables `inet filter input` chain), and `Sandbox 1`.
 9. **Review**: every setting, the complete `torrc`, and a list of every privileged change. Nothing is modified before you confirm.
-
-![Final review in a dry run](docs/assets/tor-relay-setup-review.svg)
 
 When [fzf](https://github.com/junegunn/fzf) is available, the script uses searchable selectors and scrollable command-output panels. If fzf isn't installed, the script offers to install it; you can decline and continue in plain line mode. `--plain` forces plain mode.
 

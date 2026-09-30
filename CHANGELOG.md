@@ -18,6 +18,9 @@ All notable changes to this project are documented here.
 
 - Toggling `Sandbox` in the configuration editor restarts Tor instead of reloading it, because Tor rejects Sandbox changes on reload.
 - Identity-key backups note that they include family keys.
+- fzf panels follow the terminal's own background colour instead of a hard-coded near-black one.
+- Dry runs name the Tor user and the generated key file, and say what would be verified, instead of printing placeholders and warnings.
+- The README's static screenshots are replaced by a recorded fzf-mode demo (`docs/demo/setup.tape`, VHS). A Demo workflow re-records it on pull requests that change the UI.
 
 ### Fixed
 

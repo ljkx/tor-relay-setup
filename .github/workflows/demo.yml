@@ -1,0 +1,48 @@
+name: Demo
+
+# Re-records the README demo (docs/assets/demo.gif) from docs/demo/setup.tape,
+# so UI changes can be reviewed as an artifact before the GIF is committed.
+
+on:
+  pull_request:
+    paths:
+      - setup-tor-guard-relay.sh
+      - docs/demo/**
+      - .github/workflows/demo.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    name: Record demo.gif
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned toolchain (incl. fzf)
+        run: |
+          scripts/install-dev-tools.sh
+          echo "${GITHUB_WORKSPACE}/.tools/bin" >> "$GITHUB_PATH"
+
+      - name: Record with VHS
+        uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf # v2.1.1
+        with:
+          version: v0.12.1
+          path: docs/demo/setup.tape
+          install-fonts: true
+
+      - name: Upload recording
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: demo-gif
+          path: docs/assets/demo.gif
+          if-no-files-found: error
