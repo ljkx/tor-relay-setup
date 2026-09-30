@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Fixed
+
+- ORPort reachability checks now recognise the self-test notices of Tor 0.4.5 and later, which include the tested address. Previously a reachable relay was always reported as "not verified".
+- The outbound IPv6 check pings the current IPv6 directory authorities; the old tor26 address was retired.
+- Debian unattended-upgrades now match the `<codename>-security` suite, so Debian security updates are actually installed automatically.
+- Monthly traffic budgets treat `TB`/`GB` as decimal provider units and `TiB`/`GiB`/`GBytes` as binary, and pace over a 31-day month. `10TB` previously produced an `AccountingMax` about 10% above the real quota.
+- Candidate `torrc` files are verified with Debian's `tor-service-defaults-torrc`, matching what `tor@default` checks before it starts.
+- The Tor signing key file must contain exactly one primary key before it is installed into the apt keyring.
+- Declining the "DELETE SCRIPT TRACES" confirmation no longer silently drops the report cleanup the operator selected.
+- The fzf review panel renders colours instead of showing raw escape codes.
+- Dropped the obsolete `apt-transport-https` prerequisite.
+
 ## v1.0.0-beta.4 - 2026-05-18
 
 ### Changed

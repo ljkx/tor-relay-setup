@@ -170,14 +170,14 @@ SafeLogging 1
 Sandbox 1
 ```
 
-Optional steady budget example for a `10TB` monthly quota, counted as combined inbound + outbound with 10% headroom:
+Optional steady budget example for a `10TB` monthly quota (decimal, as providers bill it), counted as combined inbound + outbound with 10% headroom and paced over a 31-day month:
 
 ```torrc
-RelayBandwidthRate 1864 KBytes
-RelayBandwidthBurst 9320 KBytes
+RelayBandwidthRate 1640 KBytes
+RelayBandwidthBurst 8200 KBytes
 AccountingStart month 1 00:00
 AccountingRule sum
-AccountingMax 9216 GBytes
+AccountingMax 8381 GBytes
 ```
 
 ## Existing Relay Console
