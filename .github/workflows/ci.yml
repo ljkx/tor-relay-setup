@@ -88,14 +88,22 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make build
-      - name: apply --dry-run against a fixture relay
+      - name: apply --dry-run against a fresh fixture server
         run: |
           # shellcheck disable=SC1091
-          source docs/demo/demo-env.sh
+          source docs/demo/demo-env.sh fresh
           bin/tor-relay-setup apply --dry-run --yes --plain --config docs/examples/relay.toml | tee apply.log
           grep -F "Dry run complete" apply.log
           grep -F "tor --keygen-family" apply.log
-      - name: status --json against the fixture
+      - name: apply refuses to overwrite an existing family key
+        run: |
+          # shellcheck disable=SC1091
+          source docs/demo/demo-env.sh
+          if bin/tor-relay-setup apply --dry-run --yes --plain --config docs/examples/relay.toml > conflict.log 2>&1; then
+            echo "::error::apply should refuse to replace the fixture's family key"; exit 1
+          fi
+          grep -F "already exists" conflict.log
+      - name: status --json against the fixture relay
         run: |
           # shellcheck disable=SC1091
           source docs/demo/demo-env.sh

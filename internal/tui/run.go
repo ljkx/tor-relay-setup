@@ -93,8 +93,11 @@ func RunApplyPlain(opt Options, s config.Setup, facts system.Facts, yes bool, in
 	defer stop()
 	if l := localOf(opt.Host); l != nil {
 		l.Observe = func(e host.Event) {
-			if e.Dry {
-				fmt.Fprintln(out, "      would: "+e.Text)
+			switch {
+			case e.Dry && e.Kind == host.EventCommand:
+				fmt.Fprintln(out, "      would run: "+e.Text)
+			case e.Dry:
+				fmt.Fprintln(out, "      "+e.Text)
 			}
 		}
 	}

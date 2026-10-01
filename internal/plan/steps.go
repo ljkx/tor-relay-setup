@@ -87,6 +87,12 @@ func preflightStep(s config.Setup, f system.Facts) Step {
 			if e.Facts.DiskFreeMiB > 0 && e.Facts.DiskFreeMiB < 512 {
 				return fmt.Errorf("only %d MiB free under /var; apt needs at least 512 MiB (check df -h)", e.Facts.DiskFreeMiB)
 			}
+			if s.Family.Mode == "generate" {
+				key := family.KeyDirectory("", "", "/var/lib/tor") + "/" + s.Family.KeyName + ".secret_family_key"
+				if _, err := e.Host.Stat(key); err == nil {
+					return fmt.Errorf("a family key named %q already exists (%s); choose another name or import it instead", s.Family.KeyName, key)
+				}
+			}
 			need := system.RequiredRAMMiB(s.IsExit())
 			if e.Facts.MemTotalMiB > 0 && e.Facts.MemTotalMiB < need {
 				r.Note(Warn, fmt.Sprintf("%d MiB RAM is below Tor's recommended %d MiB for this relay type", e.Facts.MemTotalMiB, need))
