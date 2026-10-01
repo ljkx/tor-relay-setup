@@ -485,7 +485,7 @@ func (c *console) liveRows(a *App, barW int) [][2]string {
 	}
 	return [][2]string{
 		{"Live", t.InfoText.Render("↓ "+humanRate(c.rate.Read)) + "  " + t.Directive.Render("↑ "+humanRate(c.rate.Written))},
-		{"", t.Directive.Render(sparkline(c.rates, clamp(barW, 8, liveWindow))) + " " + t.Faintly.Render(fmt.Sprintf("%ds", len(c.rates)*int(liveEvery.Seconds())))},
+		{"", t.Directive.Render(trendSparkline(c.rates, clamp(barW, 8, liveWindow))) + " " + t.Faintly.Render(fmt.Sprintf("%ds", len(c.rates)*int(liveEvery.Seconds())))},
 		{"Connections", fmt.Sprintf("%d OR", c.last.Connections)},
 	}
 }

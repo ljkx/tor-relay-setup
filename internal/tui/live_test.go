@@ -223,3 +223,20 @@ func TestUpdateHint(t *testing.T) {
 		t.Errorf("header lacks the update hint:\n%s", strings.SplitN(v, "\n", 2)[0])
 	}
 }
+
+func TestTrendSparkline(t *testing.T) {
+	t.Parallel()
+	// Scaled to its own range: the minimum sits a third of the way up.
+	if got := trendSparkline([]float64{100, 103, 106}, 8); got != "▃▆█" {
+		t.Errorf("trend = %q", got)
+	}
+	if got := trendSparkline([]float64{50, 50, 50}, 8); got != "▄▄▄" {
+		t.Errorf("flat = %q", got)
+	}
+	if got := trendSparkline([]float64{math.NaN(), 4}, 8); got != " ▄" {
+		t.Errorf("single value with gap = %q", got)
+	}
+	if got := trendSparkline([]float64{0, 0}, 8); got != "▁▁" {
+		t.Errorf("idle = %q", got)
+	}
+}
