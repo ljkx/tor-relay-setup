@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/onionoo"
+	"github.com/ljkx/tor-relay-setup/internal/update"
 )
 
 // Options configures a TUI session.
@@ -21,6 +25,33 @@ type Options struct {
 	Prefill *config.Setup
 	// ConfigPath is where "save config" writes; default ./relay.toml.
 	ConfigPath string
+	// Onionoo is the Tor Metrics client; the zero value uses the public API.
+	Onionoo onionoo.Client
+	// UpdateCheck shows a header hint when a newer release exists.
+	UpdateCheck bool
+}
+
+// stateDir holds the cached update check (and the setup state).
+const stateDir = "/var/lib/tor-relay-setup"
+
+type updateMsg string
+
+// checkUpdate looks up the newest release in the background, at most once
+// a day; failures are silent.
+func checkUpdate() tea.Msg {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	latest, _ := update.CheckCached(ctx, stateDir, 24*time.Hour)
+	return updateMsg(latest)
+}
+
+// newerRelease returns latest when it is newer than this build. Builds
+// without a release version (dev, snapshots) never show the hint.
+func newerRelease(current, latest string) string {
+	if cmp, ok := update.Compare(current, latest); ok && cmp < 0 {
+		return latest
+	}
+	return ""
 }
 
 // ErrAborted is returned when the operator quits before finishing.
@@ -46,6 +77,10 @@ type App struct {
 	err    error
 	done   bool
 	toast  string
+	latest string // a newer release, when the update check found one
+	// console, once started, keeps receiving its background updates while
+	// another view is on screen.
+	console *console
 }
 
 func newApp(opt Options, first screen) *App {
@@ -58,6 +93,9 @@ func newApp(opt Options, first screen) *App {
 // Init starts background work: terminal colours, the spinner, and probes.
 func (a *App) Init() tea.Cmd {
 	cmds := []tea.Cmd{tea.RequestBackgroundColor, a.spin.Tick, detectFacts(a.opt.Host)}
+	if a.opt.UpdateCheck {
+		cmds = append(cmds, checkUpdate)
+	}
 	if s, ok := a.screen.(interface{ init(*App) tea.Cmd }); ok {
 		cmds = append(cmds, s.init(a))
 	}
@@ -86,11 +124,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case quitMsg:
 		a.err, a.done = msg.err, true
 		return a, tea.Quit
+	case updateMsg:
+		a.latest = newerRelease(a.opt.Version, string(msg))
+		return a, nil
 	case toastMsg:
 		a.toast = string(msg)
 	}
 	if changed, cmd := a.checks.update(msg); changed {
 		cmds = append(cmds, cmd)
+	}
+	if c := a.console; c != nil && a.screen != screen(c) {
+		if cmd, ok := c.background(a, msg); ok {
+			return a, tea.Batch(append(cmds, cmd)...)
+		}
 	}
 	next, cmd := a.screen.update(a, msg)
 	a.screen = next
@@ -104,6 +150,9 @@ func (a *App) View() tea.View {
 	right := a.checks.Facts.Hostname
 	if a.opt.DryRun {
 		right = t.Badge.Render("DRY RUN") + "  " + right
+	}
+	if a.latest != "" {
+		right = t.WarnText.Render("↑ "+a.latest+" available · tor-relay-setup self-update") + "  " + right
 	}
 	top := header(t, a.width, a.opt.Version, right)
 	body := a.screen.view(a)

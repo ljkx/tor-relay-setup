@@ -1,0 +1,52 @@
+name: Tor canary
+
+# Runs the container integration test against the Tor Project's nightly and
+# experimental packages, so a Tor change that breaks setup (torrc options,
+# family keys, package layout) shows up before it reaches the stable suite.
+# Failures here are early warnings, not release blockers.
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/tor-canary.yml
+      - internal/integration/**
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:trixie
+            suite: tor-nightly-main-trixie
+          - image: debian:trixie
+            suite: tor-experimental-trixie
+          - image: ubuntu:noble
+            suite: tor-nightly-main-noble
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build integration test binary
+        run: CGO_ENABLED=0 go test -c -tags integration -o itest ./internal/integration
+      - name: Setup with Tor from ${{ matrix.suite }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          SUITE: ${{ matrix.suite }}
+        run: docker run --rm -e TOR_SUITE="$SUITE" -v "$PWD/itest:/itest:ro" "$IMAGE" /itest -test.v

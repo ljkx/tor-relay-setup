@@ -26,15 +26,19 @@ internal/apt            one-transaction apt with APT::Status-Fd progress and loc
 internal/system         concurrent fact detection, firewall commands, /proc listeners, IPv6 reachability
 internal/family         FamilyId keys: validate, generate with tor, install, list
 internal/service        systemctl and journalctl, reachability wait, family warnings
-internal/onionoo        Tor Metrics client
-internal/status         the health report behind the console and status --json
+internal/onionoo        Tor Metrics client: details, search, bandwidth history
+internal/metrics        MetricsPort scraper behind the console's live traffic
+internal/status         the health report behind the console and status (text, JSON, Prometheus)
+internal/update         self-update and the cached "newer release" check
+internal/remote         apply --host: ssh/scp fleet runs with family key hand-off
 internal/tui            Bubble Tea v2 app: wizard (huh forms), review, apply, console
 internal/integration    real-system test, containers only
+docs/demo/fakerelay     stand-in MetricsPort and Onionoo for the demo recordings
 ```
 
 Two rules keep this testable:
 
-1. **Nothing outside `internal/host` touches the machine.** Steps receive a `host.Host`, so a dry run (`host.DryRun`) and the tests (`host.Fake`) see exactly the commands and writes a real run would make.
+1. **Nothing outside `internal/host` touches the machine.** Steps receive a `host.Host`, so a dry run (`host.DryRun`) and the tests (`host.Fake`) see exactly the commands and writes a real run would make. There are two deliberate exceptions, both outside the relay's configuration: `internal/update` replaces its own binary (never in a dry run) and caches the release check in the state directory. Read-only HTTP (Onionoo, the MetricsPort, the GitHub API) also goes directly through `net/http`.
 2. **The UI only observes.** `plan.Run` emits events. The TUI, the plain runner, and the tests render those events differently, but nothing in the UI decides what gets changed.
 
 ## Development
@@ -62,13 +66,17 @@ source docs/demo/demo-env.sh          # or: source docs/demo/demo-env.sh fresh
 bin/tor-relay-setup --dry-run         # console on the fixture relay
 ```
 
-The binary reads the fixture through `TOR_RELAY_SETUP_ROOT`, and it refuses that variable outside `--dry-run`.
+The binary reads the fixture through `TOR_RELAY_SETUP_ROOT`, and it refuses that variable outside `--dry-run`. If `fakerelay` is on PATH (`go build -o bin/fakerelay ./docs/demo/fakerelay`, which `make demo` does), the script starts it, and the console shows live traffic and Tor Metrics data from it through `TOR_RELAY_SETUP_ONIONOO_URL`. That variable is also dry-run only.
 
 ### Tests
 
 - Steps and helpers are tested against `host.NewFake()`: assert on `Fake.Ran(...)`, `Fake.Files`, and the plan events.
 - TUI tests exercise models directly (`update`/`view`) with ANSI stripped; they do not need a terminal.
+- **Snapshot tests** (`internal/tui/golden_test.go`) render whole screens into `internal/tui/testdata/*.golden`. After an intended UI change, run `go test ./internal/tui -run Golden -update` and review the diff in the PR.
 - `internal/integration` runs the real Tor repository setup, a single apt transaction, `tor --keygen-family`, and `tor --verify-config` on Debian 12/13 and Ubuntu 22.04/24.04/26.04 (plus arm64) in CI.
+- The **Real install** CI job runs `apply --yes` unattended on a fresh Ubuntu 24.04 VM. It then checks systemd, UFW, the MetricsPort, `status --json`, `--format prometheus`, an idempotent second apply, and `uninstall`.
+- The **Tor canary** workflow runs the integration test nightly against `tor-nightly-main-*` and `tor-experimental-*` packages (`TOR_SUITE`), to catch Tor changes early.
+- The **apt repository build** job builds and signs a repository with a throw-away key and reads it back with apt.
 - The **Demo** workflow re-records the README GIFs on every PR that touches the UI and attaches them as artifacts. Look at them, and commit new GIFs when the UI changed.
 
 ## Pull requests

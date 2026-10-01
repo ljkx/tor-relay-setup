@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
+	"github.com/ljkx/tor-relay-setup/internal/metrics"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/status"
@@ -17,12 +19,30 @@ import (
 
 const torrcPath = "/etc/tor/torrc"
 
+// How often the console refreshes on its own.
+const (
+	liveEvery      = 2 * time.Second  // MetricsPort scrape
+	refreshEvery   = 30 * time.Second // service, listener, log, warnings
+	directoryEvery = 30 * time.Minute // Onionoo publishes hourly
+	liveWindow     = 60               // samples kept for the live sparkline
+)
+
 type (
 	reportMsg    status.Report
 	directoryMsg struct {
 		relay *onionoo.Relay
 		err   error
 	}
+	historyMsg struct {
+		bw  *onionoo.Bandwidth
+		err error
+	}
+	sampleMsg struct {
+		sample metrics.Sample
+		err    error
+	}
+	liveTickMsg    time.Time
+	refreshTickMsg time.Time
 )
 
 type action struct {
@@ -34,17 +54,30 @@ type action struct {
 type console struct {
 	report     status.Report
 	loaded     bool
+	updated    time.Time
 	dir        *onionoo.Relay
 	dirErr     error
 	dirLoading bool
+	dirAt      time.Time
+	history    *onionoo.Bandwidth
 	cursor     int
 	actions    []action
+	ticking    bool
+
+	// Live traffic from the MetricsPort.
+	last    metrics.Sample
+	rate    metrics.Rate
+	rates   []float64 // total bytes/s, oldest first
+	liveErr error
 }
 
 func newConsole() *console {
 	c := &console{}
 	c.actions = []action{
-		{"r", "Refresh", "Re-check everything", func(a *App, c *console) (screen, tea.Cmd) { return c, c.refresh(a) }},
+		{"r", "Refresh", "Re-check everything now", func(a *App, c *console) (screen, tea.Cmd) {
+			c.dirAt = time.Time{} // ask Tor Metrics again too
+			return c, c.refresh(a)
+		}},
 		{"l", "Live logs", "Follow the Tor log in place", func(a *App, c *console) (screen, tea.Cmd) {
 			v := newLogView(c)
 			return v, v.start(a)
@@ -86,7 +119,92 @@ func newConsole() *console {
 	return c
 }
 
-func (c *console) init(a *App) tea.Cmd { return c.refresh(a) }
+// init registers the console with the app, so its background updates keep
+// arriving while another view is open, and starts the refresh timers.
+func (c *console) init(a *App) tea.Cmd {
+	a.console = c
+	cmds := []tea.Cmd{c.refresh(a)}
+	if !c.ticking {
+		c.ticking = true
+		cmds = append(cmds, c.scrape(), liveTick(), refreshTick())
+	}
+	return tea.Batch(cmds...)
+}
+
+func liveTick() tea.Cmd {
+	return tea.Tick(liveEvery, func(t time.Time) tea.Msg { return liveTickMsg(t) })
+}
+
+func refreshTick() tea.Cmd {
+	return tea.Tick(refreshEvery, func(t time.Time) tea.Msg { return refreshTickMsg(t) })
+}
+
+// scrape reads the MetricsPort once, when one is configured and Tor runs.
+func (c *console) scrape() tea.Cmd {
+	addr := c.report.Relay.MetricsPort
+	if addr == "" || (c.loaded && !c.report.Service.Active) {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), liveEvery)
+		defer cancel()
+		s, err := metrics.Scrape(ctx, nil, addr)
+		return sampleMsg{sample: s, err: err}
+	}
+}
+
+// background handles the console's own data messages and timers. It runs
+// whether or not the console is on screen; ok is false for other messages.
+func (c *console) background(a *App, msg tea.Msg) (cmd tea.Cmd, ok bool) {
+	switch msg := msg.(type) {
+	case reportMsg:
+		first := !c.loaded
+		c.report, c.loaded, c.updated = status.Report(msg), true, time.Now()
+		if first {
+			return tea.Batch(c.lookup(a), c.scrape()), true
+		}
+		if !c.dirLoading && (c.dirAt.IsZero() || time.Since(c.dirAt) > directoryEvery) {
+			return c.lookup(a), true
+		}
+		return nil, true
+	case directoryMsg:
+		c.dir, c.dirErr, c.dirLoading, c.dirAt = msg.relay, msg.err, false, time.Now()
+		return nil, true
+	case historyMsg:
+		if msg.err == nil {
+			c.history = msg.bw
+		}
+		return nil, true
+	case sampleMsg:
+		c.record(msg.sample, msg.err)
+		return nil, true
+	case liveTickMsg:
+		return tea.Batch(c.scrape(), liveTick()), true
+	case refreshTickMsg:
+		// Only re-check the system while the dashboard is visible.
+		if a.screen == screen(c) {
+			return tea.Batch(c.refresh(a), refreshTick()), true
+		}
+		return refreshTick(), true
+	}
+	return nil, false
+}
+
+// record adds a MetricsPort sample to the live traffic view.
+func (c *console) record(s metrics.Sample, err error) {
+	c.liveErr = err
+	if err != nil {
+		return
+	}
+	if r, ok := metrics.Between(c.last, s); ok && !c.last.At.IsZero() {
+		c.rate = r
+		c.rates = append(c.rates, r.Total())
+		if len(c.rates) > liveWindow {
+			c.rates = c.rates[len(c.rates)-liveWindow:]
+		}
+	}
+	c.last = s
+}
 
 func (c *console) refresh(a *App) tea.Cmd {
 	h := a.opt.Host
@@ -97,44 +215,51 @@ func (c *console) refresh(a *App) tea.Cmd {
 	}
 }
 
-func (c *console) lookup() tea.Cmd {
+// lookup asks Onionoo for the relay's published details and traffic
+// history, concurrently.
+func (c *console) lookup(a *App) tea.Cmd {
 	fp := c.report.Relay.Fingerprint
 	if fp == "" {
 		return nil
 	}
 	c.dirLoading = true
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		defer cancel()
-		r, err := status.Directory(ctx, onionoo.Client{}, fp)
-		return directoryMsg{relay: r, err: err}
-	}
+	client := a.opt.Onionoo
+	return tea.Batch(
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			r, err := status.Directory(ctx, client, fp)
+			return directoryMsg{relay: r, err: err}
+		},
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			bw, err := client.Bandwidth(ctx, fp)
+			return historyMsg{bw: bw, err: err}
+		},
+	)
 }
 
 func (c *console) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
-	switch msg := msg.(type) {
-	case reportMsg:
-		first := !c.loaded
-		c.report, c.loaded = status.Report(msg), true
-		if first || c.dir == nil {
-			return c, c.lookup()
-		}
-	case directoryMsg:
-		c.dir, c.dirErr, c.dirLoading = msg.relay, msg.err, false
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "up", "k":
-			c.cursor = (c.cursor - 1 + len(c.actions)) % len(c.actions)
-		case "down", "j", "tab":
-			c.cursor = (c.cursor + 1) % len(c.actions)
-		case "enter":
-			return c.actions[c.cursor].run(a, c)
-		default:
-			for i, act := range c.actions {
-				if msg.String() == act.key {
-					c.cursor = i
-					return act.run(a, c)
-				}
+	if cmd, ok := c.background(a, msg); ok {
+		return c, cmd
+	}
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return c, nil
+	}
+	switch key.String() {
+	case "up", "k":
+		c.cursor = (c.cursor - 1 + len(c.actions)) % len(c.actions)
+	case "down", "j", "tab":
+		c.cursor = (c.cursor + 1) % len(c.actions)
+	case "enter":
+		return c.actions[c.cursor].run(a, c)
+	default:
+		for i, act := range c.actions {
+			if key.String() == act.key {
+				c.cursor = i
+				return act.run(a, c)
 			}
 		}
 	}
@@ -261,12 +386,14 @@ func (c *console) cards(a *App, width int) string {
 	if metrics == "" {
 		metrics = "off"
 	}
-	traffic := panel(t, "Traffic", kv(t, [][2]string{
-		{"Rate", bw},
+	trafficRows := [][2]string{
+		{"Limit", bw},
 		{"Accounting", acct},
 		{"MetricsPort", metrics},
-		{"Sandbox", yesNo(r.Relay.Sandbox)},
-	}), cwRight, false)
+	}
+	trafficRows = append(trafficRows, c.liveRows(a, cwRight-18)...)
+	trafficRows = append(trafficRows, [2]string{"Sandbox", yesNo(r.Relay.Sandbox)})
+	traffic := panel(t, "Traffic", kv(t, trafficRows), cwRight, false)
 
 	var dirBody string
 	switch {
@@ -280,13 +407,18 @@ func (c *console) cards(a *App, width int) string {
 		dirBody = t.Subtle.Render("Start Tor once to get a fingerprint.")
 	default:
 		d := c.dir
-		dirBody = kv(t, [][2]string{
+		dirW := cw
+		if cols == 2 {
+			dirW = width
+		}
+		dirRows := [][2]string{
 			{"Status", statusIcon(t, d.Running, false) + " " + map[bool]string{true: "running", false: "not running"}[d.Running]},
-			{"Flags", truncate(strings.Join(d.Flags, " "), cw-16)},
+			{"Flags", truncate(strings.Join(d.Flags, " "), dirW-16)},
 			{"Advertised", humanBandwidth(d.AdvertisedBandwidth)},
 			{"Weight", fmt.Sprintf("%d", d.ConsensusWeight)},
 			{"First seen", d.FirstSeen},
-		})
+		}
+		dirBody = kv(t, append(dirRows, c.historyRows(a, dirW-18)...))
 	}
 	dir := panel(t, "Tor Metrics", dirBody, cw, false)
 
@@ -330,7 +462,74 @@ func (c *console) cards(a *App, width int) string {
 }
 
 func (c *console) keys(a *App) []string {
-	return []string{"↑/↓", "select", "enter", "run", "r", "refresh", "q", "quit"}
+	refresh := "refresh"
+	if !c.updated.IsZero() {
+		refresh = "refresh · updated " + ago(time.Since(c.updated)) + " ago"
+	}
+	return []string{"↑/↓", "select", "enter", "run", "r", refresh, "q", "quit"}
+}
+
+// liveRows are the Traffic card's MetricsPort rows; barW is the room left
+// for the sparkline.
+func (c *console) liveRows(a *App, barW int) [][2]string {
+	t := a.theme
+	switch {
+	case c.report.Relay.MetricsPort == "":
+		return [][2]string{{"Live", t.Subtle.Render("enable MetricsPort (e) to see it")}}
+	case c.loaded && !c.report.Service.Active:
+		return [][2]string{{"Live", t.Subtle.Render("Tor is stopped")}}
+	case c.liveErr != nil:
+		return [][2]string{{"Live", statusIcon(t, false, true) + " " + t.Subtle.Render("MetricsPort not answering")}}
+	case len(c.rates) == 0:
+		return [][2]string{{"Live", a.spin.View() + " " + t.Subtle.Render("measuring…")}}
+	}
+	return [][2]string{
+		{"Live", t.InfoText.Render("↓ "+humanRate(c.rate.Read)) + "  " + t.Directive.Render("↑ "+humanRate(c.rate.Written))},
+		{"", t.Directive.Render(sparkline(c.rates, clamp(barW, 8, liveWindow))) + " " + t.Faintly.Render(fmt.Sprintf("%ds", len(c.rates)*int(liveEvery.Seconds())))},
+		{"Connections", fmt.Sprintf("%d OR", c.last.Connections)},
+	}
+}
+
+// historyRows are the Tor Metrics card's traffic-history rows.
+func (c *console) historyRows(a *App, barW int) [][2]string {
+	t := a.theme
+	if c.history == nil {
+		return nil
+	}
+	rd, wr := c.history.Read, c.history.Written
+	if len(wr.Values) == 0 {
+		return nil
+	}
+	total := make([]float64, len(wr.Values))
+	var in, out float64
+	for i, v := range wr.Values {
+		total[i] = v
+		if i < len(rd.Values) && !math.IsNaN(rd.Values[i]) {
+			total[i] += rd.Values[i]
+			in += rd.Values[i] * rd.Interval.Seconds()
+		}
+		if !math.IsNaN(v) {
+			out += v * wr.Interval.Seconds()
+		}
+	}
+	span := wr.Last.Sub(wr.First) + wr.Interval
+	label := fmt.Sprintf("%d days", int(span.Hours()/24+0.5))
+	return [][2]string{
+		{label, t.Directive.Render(sparkline(total, clamp(barW, 8, 90)))},
+		{"", t.Subtle.Render("in " + humanBytes(in) + " · out " + humanBytes(out))},
+	}
+}
+
+// ago formats an elapsed time coarsely: 4s, 2m, 1h.
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
 }
 
 // sideBySide joins two rendered panels, stretching the shorter one so the

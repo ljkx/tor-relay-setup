@@ -82,9 +82,45 @@ sudo tor-relay-setup apply --config relay.toml --yes   # unattended
 
 Keep one file per relay in version control. The only values that should differ between relays are the nickname and, for family members, `family.mode = "import"` with the key path.
 
+### Several relays from your workstation
+
+`apply --host` runs the same file on remote servers through your own `ssh` and `scp`, one host after another:
+
+```bash
+tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2 --dry-run
+tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2
+```
+
+- Your `~/.ssh/config`, keys, jump hosts, and `known_hosts` apply. Ports and other options belong in `~/.ssh/config`; `--host` accepts only `[user@]host`.
+- Each host must have the same CPU architecture as your workstation, because it gets a copy of this binary. Each host also gets the config, in a private temporary directory removed afterwards.
+- The remote user must be root or have passwordless `sudo`, since the remote side runs without a terminal.
+- With `family.mode = "generate"`, the first host creates the family key, and every other host imports it. If the first host fails, the rest are skipped so the fleet never ends up in separate families. With `import`, the local key file is uploaded to every host.
+- `--keep-going` continues after a failed host (except the family host) and prints a summary at the end.
+
+The nickname comes from the file, so give each relay its own copy, or rename relays afterwards with **console → Edit settings**.
+
 ## Monitoring
 
+- **The console** refreshes on its own. With MetricsPort enabled, it shows live traffic every two seconds; health is re-checked every 30 seconds, and Tor Metrics, including a month of traffic history, every 30 minutes.
 - **`tor-relay-setup status --json`** returns the console's health report as JSON (service, version, listener, reachability, family keys, Tor Metrics, warnings). The exit code is 1 when something needs attention, which makes it easy to wire into cron, systemd timers, or a monitoring agent.
+- **Prometheus:** `status --format prometheus` prints the same report as `tor_relay_setup_*` gauges, such as `service_active`, `reachable`, `family_keys_missing`, `warnings`, and `consensus_weight`. It always exits 0, so it suits node_exporter's textfile collector:
+
+  ```ini
+  # /etc/systemd/system/tor-relay-metrics.service
+  [Service]
+  Type=oneshot
+  ExecStart=/bin/sh -c 'tor-relay-setup status --format prometheus > /var/lib/prometheus/node-exporter/tor_relay.prom.tmp && mv /var/lib/prometheus/node-exporter/tor_relay.prom.tmp /var/lib/prometheus/node-exporter/tor_relay.prom'
+
+  # /etc/systemd/system/tor-relay-metrics.timer
+  [Timer]
+  OnBootSec=2min
+  OnUnitActiveSec=5min
+
+  [Install]
+  WantedBy=timers.target
+  ```
+
+  Enable it with `sudo systemctl enable --now tor-relay-metrics.timer`.
 - **Nyx:** `sudo -u debian-tor nyx`
 - **MetricsPort:** if enabled, Prometheus metrics are served on `127.0.0.1:9035`, reachable from the server only:
 
@@ -131,7 +167,7 @@ A failed apply shows the failing step, a hint, and the path of the full log. Eve
 
 ## Uninstalling this tool
 
-`sudo tor-relay-setup uninstall` removes only the tool's own state and logs (`/var/lib/tor-relay-setup`, `/var/log/tor-relay-setup`). Delete the binary yourself afterwards, or run `sudo apt remove tor-relay-setup` if you installed the `.deb`.
+`sudo tor-relay-setup uninstall` removes the tool's own state and logs (`/var/lib/tor-relay-setup`, `/var/log/tor-relay-setup`), then offers to remove the binary itself. `--yes` removes it without asking. If you installed the `.deb`, it tells you to run `sudo apt remove tor-relay-setup` instead.
 
 It never removes Tor, the torrc, `/var/lib/tor`, identity or family keys, firewall rules, logs, Unbound, or hostname changes. Those belong to the operator.
 

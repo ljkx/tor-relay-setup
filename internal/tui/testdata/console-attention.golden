@@ -1,0 +1,44 @@
+ ◆ tor-relay-setup vtest                                                                                       old-host
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭────────────────────────────────╮ ╭─────────────────────────────────────────────────────────────────────────────────╮
+│ Actions                        │ │ Needs attention                                                                 │
+│  r  Refresh                    │ │ ! tor@default is not running                                                    │
+│     Re-check everything now    │ │ ! FamilyId AAAAAAAAAAAA… has no key in /var/lib/tor/keys                        │
+│  l  Live logs                  │ ╰─────────────────────────────────────────────────────────────────────────────────╯
+│  f  Relay family               │ ╭─────────────────────────────────────────────────────────────────────────────────╮
+│  e  Edit settings              │ │ Relay                                                                           │
+│  s  Restart Tor                │ │ Nickname     GoodRelay                                                          │
+│  o  Reload Tor                 │ │ Fingerprint  ABCDEF0123456789ABCDEF0123456789ABCDEF01                           │
+│  p  Stop / start Tor           │ │ Mode         guard / middle                                                     │
+│  u  Update Tor                 │ │ ORPort       9001 (IPv4 + IPv6)                                                 │
+│  b  Back up keys               │ ╰─────────────────────────────────────────────────────────────────────────────────╯
+│  w  Reconfigure                │ ╭─────────────────────────────────────────────────────────────────────────────────╮
+│  q  Quit                       │ │ Health                                                                          │
+╰────────────────────────────────╯ │ Service       ✗ stopped                                                         │
+                                   │ tor           ✓ 0.4.9.3                                                         │
+                                   │ Listener      ✓ TCP 9001                                                        │
+                                   │ Reachability  ✓ reachable (IPv4 + IPv6)                                         │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────╯
+                                   ╭─────────────────────────────────────────────────────────────────────────────────╮
+                                   │ Family                                                                          │
+                                   │ ✗  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                                  │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────╯
+                                   ╭─────────────────────────────────────────────────────────────────────────────────╮
+                                   │ Traffic                                                                         │
+                                   │ Limit        1640 KBytes (burst 8200 KBytes)                                    │
+                                   │ Accounting   8381 GBytes per month, rule sum                                    │
+                                   │ MetricsPort  127.0.0.1:9035                                                     │
+                                   │ Live         Tor is stopped                                                     │
+                                   │ Sandbox      yes                                                                │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────╯
+                                   ╭─────────────────────────────────────────────────────────────────────────────────╮
+                                   │ Tor Metrics                                                                     │
+                                   │ Status      ✓ running                                                           │
+                                   │ Flags       Fast Guard Running Stable Valid                                     │
+                                   │ Advertised  104.8 Mbit/s                                                        │
+                                   │ Weight      41200                                                               │
+                                   │ First seen  2026-03-14 08:00:00                                                 │
+                                   │ 30 days     ▆▇▇████▇▇▆▆▅▄▄▄▄▄▅▅▆▇▇████▇▇▆▆                                      │
+                                   │             in 14.0 TB · out 14.0 TB                                            │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────╯
+ ↑/↓ select  ·  enter run  ·  r refresh  ·  q quit

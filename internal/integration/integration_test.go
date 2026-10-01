@@ -55,6 +55,12 @@ func TestSetupInContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("container: %s (%s, %s)", facts.PrettyName, facts.Codename, facts.Arch)
+	// The Tor canary workflow points the repository at a pre-release suite,
+	// such as tor-nightly-main-trixie, to catch breaking Tor changes early.
+	if suite := os.Getenv("TOR_SUITE"); suite != "" {
+		facts.Codename = suite
+		t.Logf("using Tor repository suite %s", suite)
+	}
 
 	s := config.Default()
 	s.Relay.Nickname = "CiRelay"

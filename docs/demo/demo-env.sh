@@ -102,6 +102,14 @@ printf '#!/bin/sh\necho "Status: inactive"\n' > "${demo_bin}/ufw"
 chmod +x "${demo_bin}"/*
 
 export TOR_RELAY_SETUP_ROOT="$demo_root"
+
+# Live traffic and Tor Metrics for the console demo (`make demo` builds it).
+if [[ "${1:-relay}" != "fresh" ]] && command -v fakerelay > /dev/null 2>&1; then
+  fakerelay > /dev/null 2>&1 &
+  demo_fakerelay=$!
+  trap 'kill "$demo_fakerelay" 2> /dev/null' EXIT
+  export TOR_RELAY_SETUP_ONIONOO_URL="http://127.0.0.1:9036"
+fi
 export PATH="${demo_bin}:${PATH}"
 export TERM=xterm-256color
 unset NO_COLOR

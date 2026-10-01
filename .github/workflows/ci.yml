@@ -110,6 +110,115 @@ jobs:
           bin/tor-relay-setup status --dry-run --json > status.json || true
           jq -e '.relay.nickname == "ExampleRelay" and .reachability.ipv4 == true and .family.missing_keys == null' status.json
 
+  vm:
+    name: Real install (Ubuntu 24.04 VM)
+    needs: [test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - name: Relay configuration
+        run: |
+          cat > ci-relay.toml << 'EOF'
+          [relay]
+          nickname = "CiRelay"
+          contact = "email:ci[]example.org ciissversion:3"
+          or_port = 9001
+          mode = "guard"
+          sandbox = true
+          metrics_port = true
+
+          [family]
+          mode = "generate"
+          key_name = "ci-family"
+
+          [bandwidth]
+          mode = "steady"
+          monthly_quota = "10TB"
+          headroom_percent = 10
+          billing = "sum"
+
+          [system]
+          unattended_upgrades = true
+          nyx = true
+          firewall = "auto"
+          enable_ufw = true
+          EOF
+      - name: apply on a real systemd host
+        run: sudo bin/tor-relay-setup apply --config ci-relay.toml --yes --plain
+      - name: The relay runs as configured
+        run: |
+          for _ in $(seq 1 30); do
+            sudo bin/tor-relay-setup status --json > status.json || true
+            jq -e '.listener.ipv4' status.json > /dev/null && break
+            sleep 2
+          done
+          jq . status.json
+          jq -e '.service.active and .tor.supported and .listener.ipv4
+            and .relay.nickname == "CiRelay" and .relay.sandbox
+            and (.family.ids | length) == 1 and .family.missing_keys == null' status.json
+          sudo ufw status | grep -E '^9001/tcp +ALLOW'
+          curl -fsS http://127.0.0.1:9035/metrics | grep -F 'tor_relay_traffic_bytes{direction="read"}'
+          systemctl is-enabled unattended-upgrades
+      - name: Applying again keeps the relay and its family
+        run: |
+          id=$(jq -r '.family.ids[0]' status.json)
+          sed -e 's/^mode = "generate"/mode = "none"/' -e "/^key_name/c keep_ids = [\"${id}\"]" ci-relay.toml > again.toml
+          sudo bin/tor-relay-setup apply --config again.toml --yes --plain
+          sudo grep -Fx "FamilyId ${id}" /etc/tor/torrc
+          systemctl is-active tor@default
+      - name: status --format prometheus
+        run: |
+          sudo bin/tor-relay-setup status --format prometheus | tee metrics.prom
+          grep -Fx 'tor_relay_setup_service_active 1' metrics.prom
+      - name: uninstall removes the tool, never Tor
+        run: |
+          sudo bin/tor-relay-setup uninstall --yes --plain
+          test ! -e /var/lib/tor-relay-setup && test ! -e bin/tor-relay-setup
+          systemctl is-active tor@default
+          sudo test -s /var/lib/tor/keys/ci-family.secret_family_key
+      - name: Tor log
+        if: always()
+        run: sudo journalctl -u tor@default --no-pager -n 60 || true
+
+  apt-repo:
+    name: apt repository build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build, sign, and read a repository with a throw-away key
+        run: |
+          work=$(mktemp -d)
+          export GNUPGHOME="${work}/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --passphrase '' --quick-gen-key 'CI <ci@example.invalid>' ed25519 sign 1d
+          fpr=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')
+          for arch in amd64 arm64; do
+            pkg="${work}/pkg-${arch}"
+            mkdir -p "${pkg}/DEBIAN" "${pkg}/usr/bin" "${work}/debs"
+            printf '#!/bin/sh\n' > "${pkg}/usr/bin/tor-relay-setup"
+            printf 'Package: tor-relay-setup\nVersion: 0.0.1\nArchitecture: %s\nMaintainer: CI <ci@example.invalid>\nDescription: test\n' "$arch" > "${pkg}/DEBIAN/control"
+            dpkg-deb -b "$pkg" "${work}/debs/tor-relay-setup_0.0.1_${arch}.deb"
+          done
+          scripts/build-apt-repo.sh "${work}/debs" "${work}/site" "$fpr"
+          mkdir -p "${work}/state/lists/partial" "${work}/cache/archives/partial"
+          echo "deb [signed-by=${work}/site/tor-relay-setup.asc] file://${work}/site stable main" > "${work}/sources.list"
+          chmod -R a+rX "$work"
+          apt=(-o "Dir::State=${work}/state" -o "Dir::Cache=${work}/cache" -o "Dir::Etc::SourceList=${work}/sources.list" -o Dir::Etc::SourceParts=-)
+          apt-get "${apt[@]}" -o APT::Update::Error-Mode=any update
+          apt-cache "${apt[@]}" policy tor-relay-setup | grep -F 'Candidate: 0.0.1'
+
   installer:
     name: install.sh (${{ matrix.image }})
     runs-on: ubuntu-24.04
