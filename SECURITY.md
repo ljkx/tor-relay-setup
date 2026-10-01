@@ -7,7 +7,7 @@ This project configures privileged services on internet-facing servers, so every
 | Version | Supported |
 | --- | --- |
 | 3.x (latest release, Go binary) | Yes |
-| 2.x (Bash script) | Security fixes until 3.0.0 is final; please move to 3.x |
+| 2.x (Bash script) | No. Replaced by 3.x; nothing needs migrating. |
 | 1.0.0 betas | No. They don't verify reachability with tor ≥ 0.4.5 and don't install Debian security updates automatically. |
 
 The tool requires tor 0.4.9 or newer, the only series the Tor network still accepts.

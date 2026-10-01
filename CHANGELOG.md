@@ -2,9 +2,17 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## v3.0.0 - 2026-10-01
 
 Version 3 rewrites the tool as a single static Go binary with a Bubble Tea interface. It replaces `setup-tor-guard-relay.sh`. Existing relays need no migration: the console reads the current torrc, and **Reconfigure** keeps its family and bandwidth limits.
+
+**Install:** `curl -fsSLO https://raw.githubusercontent.com/ljkx/tor-relay-setup/main/install.sh && sudo bash install.sh`, or use the `.deb` for your architecture below. Start with `tor-relay-setup --dry-run`.
+
+**How this release was tested:**
+- The real installation path ran in CI on Debian 12/13 and Ubuntu 22.04/24.04/26.04 (amd64) and Debian 13 (arm64): Tor repository and key verification, one apt transaction, `tor --keygen-family`, `tor --verify-config`, and an idempotent second run.
+- Full dry runs of the binary ran against fixture relays.
+- 670 unit and model tests passed.
+- Steps that need a real server (systemd, the firewall, and Tor's outside reachability test) are covered by fake-host tests, but not yet by a public VPS run. Please report anything unexpected through the issue tracker.
 
 ### Added
 

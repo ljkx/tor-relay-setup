@@ -13,7 +13,7 @@ body:
     attributes:
       label: Script version
       description: Output of `tor-relay-setup version`
-      placeholder: "tor-relay-setup v3.0.0-beta.1"
+      placeholder: "tor-relay-setup v3.0.0"
     validations:
       required: true
   - type: input

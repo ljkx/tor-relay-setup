@@ -41,7 +41,7 @@ sudo bash install.sh
 **Debian package** (`amd64` or `arm64`):
 
 ```bash
-VERSION=v3.0.0-beta.1
+VERSION=v3.0.0
 ARCH=$(dpkg --print-architecture)
 curl -fsSLO "https://github.com/ljkx/tor-relay-setup/releases/download/${VERSION}/tor-relay-setup_${VERSION#v}_${ARCH}.deb"
 gh attestation verify "tor-relay-setup_${VERSION#v}_${ARCH}.deb" -R ljkx/tor-relay-setup   # optional
@@ -77,7 +77,7 @@ On a fresh server you answer seven short steps:
 A live `torrc` preview and a panel of facts about the server (release, memory, repository availability, IPv6 reachability, firewall, SSH ports) sit beside the questions. Those facts are gathered in the background the moment the tool starts. Nothing is modified until you press `a` on the review screen and confirm.
 
 > [!IMPORTANT]
-> This is privileged server software and still a beta. Run `--dry-run` first and read the review screen before you apply.
+> This is privileged server software. Run `--dry-run` first and read the review screen before you apply.
 
 ### Repeatable setups and fleets
 
