@@ -21,21 +21,22 @@ jobs:
     permissions:
       contents: write # create the GitHub release
       id-token: write # Sigstore signing for attestations
-      attestations: write # store the build provenance attestation
+      attestations: write # store the build provenance attestations
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Check tag matches script version and changelog
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false # never restore a cache into a release build
+
+      - name: Release notes from CHANGELOG.md
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          version=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' setup-tor-guard-relay.sh)
-          if [[ "v${version}" != "$TAG" ]]; then
-            echo "::error::Tag ${TAG} does not match VERSION=${version} in setup-tor-guard-relay.sh"
-            exit 1
-          fi
           awk -v tag="$TAG" '
             $1 == "##" && $2 == tag { found = 1; next }
             found && /^## / { exit }
@@ -46,23 +47,20 @@ jobs:
             exit 1
           fi
 
-      - name: Build release assets
-        run: make dist
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+
+      - name: Build and publish with GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.18.2
+          args: release --clean --release-notes ${{ runner.temp }}/notes.md
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/setup-tor-guard-relay.sh
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          prerelease=()
-          [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
-          gh release create "$TAG" dist/setup-tor-guard-relay.sh dist/SHA256SUMS \
-            --verify-tag \
-            --title "Tor Relay Setup ${TAG}" \
-            --notes-file "${RUNNER_TEMP}/notes.md" \
-            "${prerelease[@]}"
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb

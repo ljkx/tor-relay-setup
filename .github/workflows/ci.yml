@@ -26,13 +26,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Install pinned toolchain
         run: scripts/install-dev-tools.sh
       - name: Lint
         run: make lint
+      - name: go mod tidy is clean
+        run: go mod tidy -diff
 
   test:
-    name: Tests (host)
+    name: Tests
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -40,14 +45,66 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned toolchain
-        run: scripts/install-dev-tools.sh
-      - name: Unit, stubbed-system, and dry-run suites
-        run: make test
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Unit and dry-run tests (race detector)
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: Coverage
+        run: go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Known vulnerabilities
+        run: make vuln
 
-  distro:
+  build:
+    name: Build ${{ matrix.goarch }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build static binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: make build && file bin/tor-relay-setup && ls -l bin/tor-relay-setup
+
+  e2e:
+    name: End-to-end dry runs
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make build
+      - name: apply --dry-run against a fixture relay
+        run: |
+          # shellcheck disable=SC1091
+          source docs/demo/demo-env.sh
+          bin/tor-relay-setup apply --dry-run --yes --plain --config docs/examples/relay.toml | tee apply.log
+          grep -F "Dry run complete" apply.log
+          grep -F "tor --keygen-family" apply.log
+      - name: status --json against the fixture
+        run: |
+          # shellcheck disable=SC1091
+          source docs/demo/demo-env.sh
+          bin/tor-relay-setup status --dry-run --json > status.json || true
+          jq -e '.relay.nickname == "ExampleRelay" and .reachability.ipv4 == true and .family.missing_keys == null' status.json
+
+  integration:
     name: ${{ matrix.image }} (${{ matrix.runner == 'ubuntu-24.04-arm' && 'arm64' || 'amd64' }})
-    needs: [lint, test]
+    needs: [test]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -68,18 +125,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned toolchain
-        if: runner.arch == 'X64'
-        run: scripts/install-dev-tools.sh
-      - name: Dry-run flow inside the container
-        if: runner.arch == 'X64'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build integration test binary
+        run: CGO_ENABLED=0 go test -c -tags integration -o itest ./internal/integration
+      - name: Real Tor apt setup, keygen and verify-config in the container
         env:
           IMAGE: ${{ matrix.image }}
-        run: docker run --rm -v "$PWD:/src" -w /src "$IMAGE" .tools/bin/bats tests/e2e.bats
-      - name: Real Tor apt setup and tor --verify-config
-        env:
-          IMAGE: ${{ matrix.image }}
-        run: docker run --rm -v "$PWD:/src:ro" -w /src "$IMAGE" tests/integration/tor-repo.sh
+        run: docker run --rm -v "$PWD/itest:/itest:ro" "$IMAGE" /itest -test.v
 
   zizmor:
     name: Workflow security (zizmor)

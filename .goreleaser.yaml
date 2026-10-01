@@ -1,0 +1,62 @@
+# GoReleaser v2 — run by .github/workflows/release.yml on v* tags.
+# Local dry run: make snapshot
+version: 2
+
+project_name: tor-relay-setup
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: tor-relay-setup
+    main: ./cmd/tor-relay-setup
+    binary: tor-relay-setup
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Tag }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}" # reproducible builds
+
+archives:
+  - id: tarball
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md, CHANGELOG.md]
+
+nfpms:
+  - id: deb
+    package_name: tor-relay-setup
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}"
+    vendor: ljkx
+    homepage: https://github.com/ljkx/tor-relay-setup
+    maintainer: ljkx <177671075+ljkx@users.noreply.github.com>
+    description: |-
+      Guided setup and operator console for public Tor relays.
+      Installs tor from the Tor Project repository, configures FamilyId
+      families, paced bandwidth budgets, exit DNS, and firewalls, with a
+      review of every change before it is applied.
+    license: MIT
+    section: net
+    formats: [deb]
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/tor-relay-setup/copyright
+      - src: README.md
+        dst: /usr/share/doc/tor-relay-setup/README.md
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  disable: true # notes come from CHANGELOG.md
+
+release:
+  prerelease: auto
+  name_template: "tor-relay-setup {{ .Tag }}"
