@@ -51,7 +51,11 @@ curl -fsSL --retry 3 -o "${work}/${archive}" "${base}/${archive}"
 curl -fsSL --retry 3 -o "${work}/SHA256SUMS" "${base}/SHA256SUMS"
 
 say "Verifying SHA256SUMS"
-(cd "$work" && grep -F " ${archive}" SHA256SUMS | sha256sum --check --quiet -) \
+# Select the archive's line by exact file name: a prefix match would also
+# pick up "<archive>.sbom.json", which is not downloaded.
+sum_line=$(awk -v f="$archive" '$2 == f || $2 == "*" f' "${work}/SHA256SUMS")
+[[ -n "$sum_line" ]] || die "${archive} is not listed in SHA256SUMS"
+(cd "$work" && printf '%s\n' "$sum_line" | sha256sum --check --quiet -) \
   || die "checksum mismatch for ${archive}; do not install it"
 
 if command -v gh > /dev/null 2>&1; then

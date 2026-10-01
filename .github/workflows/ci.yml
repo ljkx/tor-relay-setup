@@ -110,6 +110,32 @@ jobs:
           bin/tor-relay-setup status --dry-run --json > status.json || true
           jq -e '.relay.nickname == "ExampleRelay" and .reachability.ipv4 == true and .family.missing_keys == null' status.json
 
+  installer:
+    name: install.sh (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:trixie, ubuntu:noble]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the newest release with this install.sh
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD/install.sh:/install.sh:ro" "$IMAGE" bash -euc '
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl > /dev/null
+            bash /install.sh
+            tor-relay-setup version
+            if TOR_RELAY_SETUP_VERSION=not-a-version bash /install.sh 2> /dev/null; then
+              echo "install.sh accepted a bogus version"; exit 1
+            fi
+          '
+
   integration:
     name: ${{ matrix.image }} (${{ matrix.runner == 'ubuntu-24.04-arm' && 'arm64' || 'amd64' }})
     needs: [test]
