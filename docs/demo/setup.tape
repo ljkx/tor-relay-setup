@@ -1,109 +1,109 @@
-# Guided setup in fzf mode, as a dry run. Recorded with VHS
+# The setup wizard as a dry run. Recorded with VHS
 # (https://github.com/charmbracelet/vhs); re-record with `make demo`.
-# Each block answers one prompt of the real script.
+# docs/demo/demo-env.sh provides a fixture server, so nothing is changed.
 
-Output "docs/assets/demo.gif"
+Output "docs/assets/setup.gif"
 
-Require fzf
+Require tor-relay-setup
 
 Set Shell "bash"
 Set FontFamily "JetBrains Mono"
-Set FontSize 15
-Set LineHeight 1.25
+Set FontSize 14
+Set LineHeight 1.2
 Set Width 1400
-Set Height 800
-Set Padding 22
-Set Margin 26
+Set Height 860
+Set Padding 18
+Set Margin 24
 Set MarginFill "#7D4698"
 Set WindowBar Colorful
 Set BorderRadius 12
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 55ms
+Set TypingSpeed 50ms
 Set CursorBlink false
 
 Hide
-Type "source docs/demo/demo-env.sh"
+Type "source docs/demo/demo-env.sh fresh"
 Enter
-Sleep 700ms
+Sleep 500ms
 Show
 
-Type "./setup-tor-guard-relay.sh --dry-run"
-Sleep 600ms
+Type "tor-relay-setup setup --dry-run"
+Sleep 500ms
 Enter
-Sleep 2.5s
+Sleep 2s
 
-# Hostname: keep.
-Type "n"
-Sleep 1s
-
-# Relay mode: guard/middle.
-Type "n"
-Sleep 1.2s
-
-# Identity: nickname, CIISS v3 ContactInfo (email, website, no hoster), ORPort 9001.
+# Relay: guard/middle, nickname.
+Enter
+Sleep 600ms
 Type "ExampleRelay"
 Sleep 400ms
 Enter
-Sleep 1s
+Sleep 800ms
+
+# Contact: guided CIISS v3 (watch the torrc preview on the right).
 Enter
-Sleep 1s
+Sleep 500ms
 Type "ops@example.org"
-Sleep 300ms
 Enter
-Sleep 800ms
+Sleep 300ms
 Type "https://example.org"
+Enter
 Sleep 300ms
-Enter
-Sleep 800ms
-Enter
-Sleep 1.2s
-Enter
-Sleep 1s
-
-# No IPv6.
-Type "n"
-Sleep 1s
-
-# Create a new relay family key (default name), skip legacy MyFamily.
-Type "2"
-Sleep 1s
 Enter
 Sleep 900ms
-Type "n"
-Sleep 1.2s
 
-# Steady monthly budget: 10TB, 10% headroom, combined in+out.
+# Network: ORPort 9001, no IPv6.
 Enter
-Sleep 1s
+Sleep 400ms
+Enter
+Sleep 900ms
+
+# Family: create a new FamilyId key.
+Down
+Sleep 500ms
+Enter
+Sleep 400ms
+Enter
+Sleep 900ms
+
+# Bandwidth: pace a 10 TB monthly quota.
+Enter
+Sleep 400ms
 Type "10TB"
+Sleep 500ms
+Enter
+Sleep 400ms
+Enter
+Sleep 1.5s
+Enter
+Sleep 900ms
+
+# System: updates, Nyx, MetricsPort, firewall, UFW, Sandbox.
+Enter
 Sleep 300ms
 Enter
-Sleep 800ms
+Sleep 300ms
 Enter
-Sleep 800ms
-Enter
-Sleep 2s
-
-# Maintenance: unattended upgrades, Nyx, MetricsPort, UFW, Sandbox.
-Enter
-Sleep 800ms
-Enter
-Sleep 800ms
+Sleep 300ms
 Type "y"
-Sleep 800ms
+Sleep 700ms
 Enter
-Sleep 800ms
+Sleep 500ms
 Enter
-Sleep 4s
-
-# Review everything, including the generated torrc.
-PageDown
+Sleep 500ms
+Enter
 Sleep 2s
-PageDown
-Sleep 2.5s
-Enter
+
+# Review everything before anything changes.
+Down 6
 Sleep 1s
-
-# Confirm. In a dry run this only prints the planned commands.
+PageDown
+Sleep 2s
+Type "a"
+Sleep 900ms
 Type "y"
-Sleep 4s
+
+# Apply (dry run): the live checklist.
+Sleep 7s
+Type "l"
+Sleep 3s

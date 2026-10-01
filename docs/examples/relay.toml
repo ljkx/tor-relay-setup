@@ -1,0 +1,44 @@
+# Example tor-relay-setup configuration for a guard/middle relay.
+#
+#   sudo tor-relay-setup apply --config relay.toml          # review, then confirm
+#   sudo tor-relay-setup apply --config relay.toml --yes    # unattended
+#   tor-relay-setup apply --config relay.toml --dry-run     # show every change, touch nothing
+#
+# The wizard writes the same format when you press "s" on the review screen.
+
+[relay]
+nickname = "ExampleRelay"
+contact = "email:ops[]example.org url:https://example.org proof:uri-familyid-ed25519 ciissversion:3"
+or_port = 9001
+mode = "guard"            # guard | exit
+ipv6 = ""                 # a global IPv6 address, or empty for none
+sandbox = true
+metrics_port = true       # 127.0.0.1:9035, local only
+
+[exit]                    # only used when mode = "exit"
+provider_permission = false
+policy = "reduced"        # reduced | default
+ipv6_exit = true
+unbound = true
+lock_resolv_conf = false
+
+[family]
+mode = "generate"         # none | generate | import
+key_name = "relay-family"
+import_key = ""           # /root/NAME.secret_family_key when mode = "import"
+family_id = ""            # only if NAME.public_family_id is not next to the key
+
+[bandwidth]
+mode = "steady"           # steady | manual | accounting | none
+monthly_quota = "10TB"    # decimal, as providers bill; TiB/GiB for binary
+headroom_percent = 10
+billing = "sum"           # sum (in+out) | out | max (each direction)
+rate_mbit = 0             # manual mode
+burst_mbit = 0
+
+[system]
+hostname = ""             # empty keeps the current hostname
+unattended_upgrades = true
+nyx = true
+firewall = "auto"         # auto | none
+enable_ufw = true
