@@ -1,6 +1,6 @@
 // Package onionoo is a small client for Tor Metrics' Onionoo API: relay
 // details for the local fingerprint, nickname search for family candidates,
-// and published status of a set of fingerprints.
+// published status of a set of fingerprints, and traffic history.
 package onionoo
 
 import (
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -278,4 +279,75 @@ func (c Client) Status(ctx context.Context, fingerprints []string) ([]Summary, e
 		return nil, err
 	}
 	return doc.summaries(), nil
+}
+
+// History is one Onionoo bandwidth graph, in bytes per second. Missing data
+// points are NaN.
+type History struct {
+	First, Last time.Time
+	Interval    time.Duration
+	Values      []float64
+}
+
+// Bandwidth is a relay's published traffic history.
+type Bandwidth struct {
+	Read, Written History
+}
+
+// historyKeys are the bandwidth graphs to use, finest first. Onionoo 8.0
+// dropped "3_days" and "1_week"; "1_month" has one point per day.
+var historyKeys = []string{"1_month", "6_months", "1_year"}
+
+type graph struct {
+	First    string     `json:"first"`
+	Last     string     `json:"last"`
+	Interval int64      `json:"interval"`
+	Factor   float64    `json:"factor"`
+	Values   []*float64 `json:"values"`
+}
+
+func (g graph) history() History {
+	h := History{Interval: time.Duration(g.Interval) * time.Second, Values: make([]float64, len(g.Values))}
+	h.First, _ = time.Parse(time.DateTime, g.First)
+	h.Last, _ = time.Parse(time.DateTime, g.Last)
+	for i, v := range g.Values {
+		if v == nil {
+			h.Values[i] = math.NaN()
+			continue
+		}
+		h.Values[i] = *v * g.Factor
+	}
+	return h
+}
+
+func pickGraph(graphs map[string]graph) History {
+	for _, k := range historyKeys {
+		if g, ok := graphs[k]; ok && len(g.Values) > 0 {
+			return g.history()
+		}
+	}
+	return History{}
+}
+
+// Bandwidth returns the published traffic history of the relay with this
+// fingerprint, or (nil, nil) when Onionoo does not list it yet.
+func (c Client) Bandwidth(ctx context.Context, fingerprint string) (*Bandwidth, error) {
+	fp, err := NormalizeFingerprint(fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Relays []struct {
+			Read  map[string]graph `json:"read_history"`
+			Write map[string]graph `json:"write_history"`
+		} `json:"relays"`
+	}
+	if err := c.get(ctx, "/bandwidth", url.Values{"lookup": {fp}}, &doc); err != nil {
+		return nil, err
+	}
+	if len(doc.Relays) == 0 {
+		return nil, nil
+	}
+	r := doc.Relays[0]
+	return &Bandwidth{Read: pickGraph(r.Read), Written: pickGraph(r.Write)}, nil
 }

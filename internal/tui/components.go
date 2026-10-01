@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -137,6 +138,107 @@ func statusIcon(t Theme, ok bool, warn bool) string {
 	default:
 		return t.BadText.Render(iconFail)
 	}
+}
+
+// sparkBlocks are the eight bar heights of a sparkline.
+var sparkBlocks = []rune("▁▂▃▄▅▆▇█")
+
+// sparkline draws values as a one-line bar chart at most width cells wide,
+// averaging neighbours when there are more values than cells. NaN values
+// (gaps in the data) draw as spaces; the scale starts at zero.
+func sparkline(values []float64, width int) string {
+	return sparklineFrom(values, width, func([]float64) float64 { return 0 })
+}
+
+// trendSparkline scales to the values' own range, so small changes in a
+// busy relay's live rate stay visible; the lowest value sits a third of the
+// way up, and a flat series draws as a flat line at mid height.
+func trendSparkline(values []float64, width int) string {
+	return sparklineFrom(values, width, func(cells []float64) float64 {
+		lo, hi := math.Inf(1), math.Inf(-1)
+		for _, v := range cells {
+			if !math.IsNaN(v) {
+				lo, hi = math.Min(lo, v), math.Max(hi, v)
+			}
+		}
+		if math.IsInf(lo, 0) {
+			return 0
+		}
+		return math.Max(0, lo-(hi-lo)/2)
+	})
+}
+
+func sparklineFrom(values []float64, width int, floorOf func([]float64) float64) string {
+	if width < 1 || len(values) == 0 {
+		return ""
+	}
+	cells := values
+	if len(values) > width {
+		cells = make([]float64, width)
+		for i := range cells {
+			lo, hi := i*len(values)/width, (i+1)*len(values)/width
+			sum, n := 0.0, 0
+			for _, v := range values[lo:hi] {
+				if !math.IsNaN(v) {
+					sum += v
+					n++
+				}
+			}
+			cells[i] = math.NaN()
+			if n > 0 {
+				cells[i] = sum / float64(n)
+			}
+		}
+	}
+	floor, peak := floorOf(cells), 0.0
+	for _, v := range cells {
+		if v > peak {
+			peak = v
+		}
+	}
+	var b strings.Builder
+	for _, v := range cells {
+		switch {
+		case math.IsNaN(v):
+			b.WriteRune(' ')
+		case peak <= 0:
+			b.WriteRune(sparkBlocks[0])
+		case peak <= floor:
+			b.WriteRune(sparkBlocks[len(sparkBlocks)/2-1])
+		default:
+			i := int(math.Round((v - floor) / (peak - floor) * float64(len(sparkBlocks)-1)))
+			b.WriteRune(sparkBlocks[clamp(i, 0, len(sparkBlocks)-1)])
+		}
+	}
+	return b.String()
+}
+
+// humanRate formats bytes per second as bits per second.
+func humanRate(bytesPerSecond float64) string {
+	bits := bytesPerSecond * 8
+	switch {
+	case bits >= 1e9:
+		return fmt.Sprintf("%.2f Gbit/s", bits/1e9)
+	case bits >= 1e6:
+		return fmt.Sprintf("%.1f Mbit/s", bits/1e6)
+	case bits >= 1e3:
+		return fmt.Sprintf("%.0f kbit/s", bits/1e3)
+	default:
+		return fmt.Sprintf("%.0f bit/s", bits)
+	}
+}
+
+// humanBytes formats a byte count with decimal units, as providers bill.
+func humanBytes(n float64) string {
+	for _, u := range []struct {
+		div  float64
+		unit string
+	}{{1e12, "TB"}, {1e9, "GB"}, {1e6, "MB"}, {1e3, "kB"}} {
+		if n >= u.div {
+			return fmt.Sprintf("%.1f %s", n/u.div, u.unit)
+		}
+	}
+	return fmt.Sprintf("%.0f B", n)
 }
 
 func truncate(s string, max int) string {

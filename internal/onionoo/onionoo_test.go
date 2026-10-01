@@ -2,6 +2,7 @@ package onionoo
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const fp1 = "0123456789ABCDEF0123456789ABCDEF01234567"
@@ -237,5 +239,51 @@ func TestZeroClientDefaults(t *testing.T) {
 	var c Client
 	if c.base() != DefaultBase || c.client() != defaultHTTP || defaultHTTP.Timeout.Seconds() != 10 {
 		t.Error("zero Client defaults")
+	}
+}
+
+const bandwidthBody = `{"version":"8.0","relays":[{"fingerprint":"` + fp1 + `",
+  "write_history":{
+    "1_month":{"first":"2026-09-01 12:00:00","last":"2026-09-03 12:00:00","interval":86400,"factor":1000.5,"count":3,"values":[100,null,999]},
+    "6_months":{"first":"2026-04-01 12:00:00","last":"2026-09-30 12:00:00","interval":172800,"factor":2,"count":1,"values":[5]}},
+  "read_history":{
+    "6_months":{"first":"2026-04-01 12:00:00","last":"2026-04-03 12:00:00","interval":172800,"factor":2,"count":2,"values":[5,7]}}
+}]}`
+
+func TestBandwidth(t *testing.T) {
+	s := newServer(t, http.StatusOK, bandwidthBody)
+	bw, err := s.client().Bandwidth(context.Background(), "$"+strings.ToLower(fp1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := s.request()
+	if req.URL.Path != "/bandwidth" || req.URL.Query().Get("lookup") != fp1 {
+		t.Fatalf("request %s", req.URL)
+	}
+	w := bw.Written
+	if len(w.Values) != 3 || w.Values[0] != 100050 || !math.IsNaN(w.Values[1]) || w.Values[2] != 999499.5 {
+		t.Fatalf("written %v", w.Values)
+	}
+	if w.Interval != 24*time.Hour || w.First.Day() != 1 || w.Last.Day() != 3 {
+		t.Fatalf("written %+v", w)
+	}
+	// No 1_month read graph: fall back to 6_months.
+	if r := bw.Read; len(r.Values) != 2 || r.Values[1] != 14 {
+		t.Fatalf("read %v", r.Values)
+	}
+}
+
+func TestBandwidthUnlisted(t *testing.T) {
+	s := newServer(t, http.StatusOK, `{"relays":[]}`)
+	bw, err := s.client().Bandwidth(context.Background(), fp1)
+	if bw != nil || err != nil {
+		t.Fatalf("got %v, %v", bw, err)
+	}
+	if _, err := s.client().Bandwidth(context.Background(), "nope"); err == nil {
+		t.Fatal("want a fingerprint error")
+	}
+	e := newServer(t, http.StatusInternalServerError, "")
+	if _, err := e.client().Bandwidth(context.Background(), fp1); err == nil {
+		t.Fatal("want a server error")
 	}
 }

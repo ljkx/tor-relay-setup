@@ -29,7 +29,8 @@ Show
 Type "tor-relay-setup --dry-run"
 Sleep 500ms
 Enter
-Sleep 4s
+# Live traffic from the MetricsPort fills in every two seconds.
+Sleep 7s
 
 # Move through the actions.
 Down

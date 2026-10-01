@@ -64,3 +64,56 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.deb
+
+  apt-repo:
+    name: Publish apt repository
+    needs: release
+    # Opt-in: set the repository variable APT_SIGNING_KEY_FINGERPRINT and the
+    # secret APT_SIGNING_KEY (see docs/RELEASE.md). Skipped otherwise.
+    if: vars.APT_SIGNING_KEY_FINGERPRINT != ''
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write # publish the repository to GitHub Pages
+      id-token: write # authenticate the Pages deployment
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the release packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir "${RUNNER_TEMP}/debs"
+
+      - name: Build and sign the repository
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+          EXPECTED: ${{ vars.APT_SIGNING_KEY_FINGERPRINT }}
+        run: |
+          if [[ -z "$APT_SIGNING_KEY" ]]; then
+            echo "::error::APT_SIGNING_KEY_FINGERPRINT is set but the APT_SIGNING_KEY secret is missing"
+            exit 1
+          fi
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import 2> /dev/null
+          fpr=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')
+          if [[ "$fpr" != "${EXPECTED// /}" ]]; then
+            echo "::error::the signing key ${fpr} is not APT_SIGNING_KEY_FINGERPRINT"
+            exit 1
+          fi
+          scripts/build-apt-repo.sh "${RUNNER_TEMP}/debs" "${RUNNER_TEMP}/site" "$fpr"
+          rm -rf "$GNUPGHOME"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

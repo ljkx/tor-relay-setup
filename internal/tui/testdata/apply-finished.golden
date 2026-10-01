@@ -1,0 +1,30 @@
+ ◆ tor-relay-setup vtest                                                                   old-host
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Relay configured 3/3 · 9.0s  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✓ First                                                                                     1.5s
+  ✓ Second                                                                                    3.0s
+  ✓ Third                                                                                     4.5s
+
+╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Your relay                                                                                     │
+│ Nickname      TestRelay                                                                        │
+│ Fingerprint   ABCDEF0123456789ABCDEF0123456789ABCDEF01                                         │
+│ FamilyId      BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB                                      │
+│ Reachability  ✓ ORPort reachable from outside                                                  │
+│                                                                                                │
+│ Relay Search lists new relays after about 3 hours; traffic ramps up over days.                 │
+│ Open the operator console any time with: sudo tor-relay-setup                                  │
+╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+ enter finish  ·  l output

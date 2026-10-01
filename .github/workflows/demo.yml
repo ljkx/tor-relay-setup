@@ -37,6 +37,7 @@ jobs:
       - name: Build the binary
         run: |
           make build
+          go build -o bin/fakerelay ./docs/demo/fakerelay
           echo "${GITHUB_WORKSPACE}/bin" >> "$GITHUB_PATH"
 
       - name: Record the setup wizard

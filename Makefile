@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN := bin/tor-relay-setup
-SHELL_SCRIPTS := install.sh docs/demo/demo-env.sh scripts/install-dev-tools.sh
+SHELL_SCRIPTS := install.sh docs/demo/demo-env.sh scripts/install-dev-tools.sh scripts/build-apt-repo.sh
 export PATH := $(CURDIR)/.tools/bin:$(PATH)
 
 .PHONY: help check build test cover lint vuln integration demo snapshot tools clean
@@ -41,6 +41,7 @@ integration: ## Real Tor apt setup, keygen and tor --verify-config in a Debian c
 	docker run --rm -v "$(CURDIR)/bin/itest:/itest:ro" debian:trixie /itest -test.v
 
 demo: build ## Re-record docs/assets/*.gif with VHS (needs vhs, ttyd, ffmpeg)
+	go build -o bin/fakerelay ./docs/demo/fakerelay
 	PATH="$(CURDIR)/bin:$$PATH" vhs docs/demo/setup.tape
 	PATH="$(CURDIR)/bin:$$PATH" vhs docs/demo/console.tape
 

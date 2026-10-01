@@ -2,11 +2,51 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## v3.1.0 - 2026-10-01
+
+**Upgrade:** run `curl -fsSLO https://raw.githubusercontent.com/ljkx/tor-relay-setup/main/install.sh && sudo bash install.sh` once. From now on, `sudo tor-relay-setup self-update` does it for you.
+
+### Added
+
+- **Live console:**
+  - The dashboard refreshes on its own: service and health every 30 seconds, Tor Metrics every 30 minutes. The footer shows when the data was last updated.
+  - **Live traffic** from the MetricsPort every 2 seconds: read and written rates, a two-minute sparkline, and open OR connections.
+  - The Tor Metrics card shows **a month of traffic history** from Onionoo as a sparkline, with totals in and out.
+  - The header shows when a newer release is available. This checks the GitHub API at most once a day, and never in dry runs or with `TOR_RELAY_SETUP_NO_UPDATE_CHECK=1`.
+- **`self-update [--check]`** installs the newest release after the same checks as `install.sh`:
+  - the SHA-256 is verified against `SHA256SUMS`, plus `gh attestation verify` when the GitHub CLI is installed;
+  - the binary is replaced atomically;
+  - a `.deb` install is left to apt;
+  - `--check` exits 10 when an update exists.
+- **Fleet apply:** `apply --config relay.toml --host user@relay1 --host user@relay2 [--keep-going]` applies one file over your own SSH:
+  - With `family.mode = "generate"`, the first host creates the family key and the others import it.
+  - It checks that each host has the same CPU architecture, and needs root or passwordless sudo on the remote side.
+- **`status --format prometheus`:** `tor_relay_setup_*` gauges for node_exporter's textfile collector. `--format text|json` replaces `--json`, which still works.
+- **`uninstall`** now also offers to remove the binary itself (`--yes` to skip the question), and points `.deb` installs to apt.
+- The release workflow can publish a **signed apt repository** to GitHub Pages. It is opt-in, and turns on once a maintainer adds the signing key (see `docs/RELEASE.md`).
+
+### Changed
+
+- The review screen shows the bandwidth rate and the monthly cap on separate lines, and long entries in **What will change** wrap with a hanging indent.
+- Usage text lists all exit codes and environment variables.
 
 ### Fixed
 
 - `install.sh` selected the archive line in `SHA256SUMS` by prefix, so it also tried to check the SBOM listed after it and refused to install. It now matches the exact file name. A CI job runs the installer against the newest release on Debian and Ubuntu.
+- Background updates (reports, Tor Metrics results) that arrived while another console view was open were dropped. They now always reach the dashboard.
+
+### Development
+
+- **Real install in CI:** every pull request runs `apply --yes` unattended on a fresh Ubuntu 24.04 VM, then checks:
+  - systemd, UFW, the MetricsPort, and the running relay through `status --json`;
+  - Prometheus output;
+  - an idempotent second apply that keeps the family;
+  - `uninstall`.
+- **Tor canary:** a nightly workflow runs the integration test against Tor's `nightly-main` and `experimental` packages.
+- **TUI snapshot tests** (`internal/tui/testdata/*.golden`) for the console, review, and apply screens.
+- **CodeQL** (Go and Actions) and **OpenSSF Scorecard** workflows.
+- `main` and `v*` tags are protected by rulesets, and the `release` environment only accepts `v*` tags.
+- `docs/demo/fakerelay` feeds the console demo with live MetricsPort and Onionoo data.
 
 ## v3.0.0 - 2026-10-01
 

@@ -182,7 +182,7 @@ func TestReviewRender(t *testing.T) {
 			width: 140,
 			want: []string{
 				"Exit relay · reduced policy · local Unbound DNS", "Nickname     TestRelay", "tor-ops@example.org",
-				"9001 (IPv4) · IPv6 [2001:db8::1]:9001", "≈ 13.4 Mbit/s steady · 8381 GBytes/month fuse",
+				"9001 (IPv4) · IPv6 [2001:db8::1]:9001", "≈ 13.4 Mbit/s steady", "Monthly cap  8381 GBytes/month (safety cap)",
 				"127.0.0.1:9035 (local only)", "Hostname     unchanged", "/etc/tor/torrc", "Nickname TestRelay",
 				"ExitRelay 1", "IPv6Exit 1", "Enable Unbound",
 			},
@@ -213,7 +213,7 @@ func TestReviewRender(t *testing.T) {
 				s.Family.Mode, s.Family.ImportKey, s.Family.FamilyID = "import", "/root/f.secret_family_key", famID("Q")
 			},
 			width: 140,
-			want:  []string{"full speed until 4190 GBytes/month", "import /root/f.secret_family_key", "FamilyId " + famID("Q")},
+			want:  []string{"Bandwidth    full speed", "Monthly cap  4190 GBytes/month", "import /root/f.secret_family_key", "FamilyId " + famID("Q")},
 		},
 		{
 			name:   "no limit",
@@ -603,7 +603,7 @@ func TestConsoleCards(t *testing.T) {
 			want: []string{
 				"Nickname     GoodRelay", "Fingerprint  ABCDEF0123456789ABCDEF0123456789ABCDEF01", "Mode         guard / middle",
 				"ORPort       9001 (IPv4 + IPv6)", "Service       ✓ running", "tor           ✓ 0.4.9.3", "Listener      ✓ TCP 9001",
-				"Reachability  ✓ reachable (IPv4 + IPv6)", "single relay (no FamilyId)", "Rate         1640 KBytes (burst 8200 KBytes)",
+				"Reachability  ✓ reachable (IPv4 + IPv6)", "single relay (no FamilyId)", "Limit        1640 KBytes (burst 8200 KBytes)",
 				"Accounting   8381 GBytes per month, rule sum", "MetricsPort  127.0.0.1:9035", "Sandbox      yes",
 				"Not published yet",
 			},
@@ -642,7 +642,7 @@ func TestConsoleCards(t *testing.T) {
 			},
 			want: []string{
 				"✗ stopped", "✗ not installed", "✗ TCP 9001", "✗ not reachable from outside", "Mode         exit",
-				"ORPort       9001", "Rate         no limit", "Accounting   off", "MetricsPort  off", "Sandbox      no",
+				"ORPort       9001", "Limit        no limit", "Accounting   off", "MetricsPort  off", "Sandbox      no",
 				"not generated yet", "Start Tor once to get a fingerprint.",
 			},
 			notWant: []string{"IPv4 + IPv6"},
@@ -782,7 +782,7 @@ func TestConsoleViewAndKeys(t *testing.T) {
 	}
 
 	c.report.Relay.Fingerprint = "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
-	if c.lookup() == nil || !c.dirLoading {
+	if c.lookup(a) == nil || !c.dirLoading {
 		t.Error("a fingerprint should start a Tor Metrics lookup")
 	}
 	c.update(a, directoryMsg{relay: &onionoo.Relay{Running: true}})

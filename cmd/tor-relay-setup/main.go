@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,22 +12,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
+	"github.com/ljkx/tor-relay-setup/internal/remote"
 	"github.com/ljkx/tor-relay-setup/internal/status"
 	"github.com/ljkx/tor-relay-setup/internal/system"
 	"github.com/ljkx/tor-relay-setup/internal/tui"
+	"github.com/ljkx/tor-relay-setup/internal/update"
 )
 
 // version is set at build time with -ldflags "-X main.version=v3.0.0".
 var version = "dev"
+
+// exitUpdateAvailable is the exit code of `self-update --check` when a
+// newer release exists.
+const exitUpdateAvailable = 10
 
 const usage = `tor-relay-setup — set up and operate a public Tor relay
 
@@ -34,20 +43,69 @@ Usage:
   tor-relay-setup [flags]                   console on a configured relay, otherwise the setup wizard
   tor-relay-setup setup [flags]             run the setup wizard
   tor-relay-setup apply --config FILE       apply a saved relay.toml (add --yes to skip the confirmation)
+  tor-relay-setup apply --config FILE --host [user@]HOST [--host ...] [--keep-going]
+                                            apply it to remote relays over ssh, one after another
   tor-relay-setup console                   open the operator console
   tor-relay-setup status [--json]           print relay health (exit code 1 when something needs attention)
-  tor-relay-setup uninstall                 remove this tool's state and logs (never Tor or its keys)
+  tor-relay-setup status --format text|json|prometheus
+                                            prometheus: node_exporter metrics; always exits 0
+  tor-relay-setup uninstall [--yes]         remove this tool's state and logs, then offer to remove
+                                            the program itself (never Tor or its keys)
+  tor-relay-setup self-update [--check]     install the newest release, verified like install.sh;
+                                            --check only compares versions
   tor-relay-setup version
 
 Flags:
   --dry-run        show every command and file change without making it (no root needed)
   --plain          plain line-by-line prompts and output (also used automatically without a terminal)
   --config FILE    prefill the wizard, or the file to apply
-  --yes            apply without asking (apply only)
-  --json           machine-readable output (status only)
+  --yes            apply without asking; uninstall: also remove the program without asking
+  --json           same as --format json
+  --format FORMAT  status output: text (default), json, or prometheus
+  --host DEST      apply on [user@]host over ssh; repeat for several relays
+  --keep-going     apply --host: continue with the next host after a failure
+  --check          self-update: only report whether a newer release exists
 
-Environment: NO_COLOR disables colour.
+Remote apply (--host):
+  Uses your ssh and scp, so ~/.ssh/config, keys and known_hosts apply. Each host gets this
+  binary (same CPU architecture) and the config in a private temporary directory that is
+  removed afterwards. The remote user must be root or have passwordless sudo. With
+  family.mode = "generate", the first host creates the family key and every further host
+  imports it, so the whole fleet is one family. --dry-run runs apply --dry-run remotely.
+
+Metrics (node_exporter textfile collector; run from cron or a systemd timer):
+  tor-relay-setup status --format prometheus > /var/lib/prometheus/node-exporter/tor_relay.prom
+  To avoid half-written scrapes, write to tor_relay.prom.tmp first and mv it into place.
+
+Exit codes:
+  0 success · 1 error, or status found a problem · 2 usage error
+  10 self-update --check: a newer release is available · 130 stopped
+
+Environment:
+  NO_COLOR=1                          disable colour
+  TOR_RELAY_SETUP_NO_UPDATE_CHECK=1   skip the console's daily check for a newer release
 `
+
+// Seams for tests.
+var (
+	newUpdater      = update.New
+	newFleet        = remote.New
+	executable      = os.Executable
+	stdinIsTerminal = isTerminal
+)
+
+// hostList collects repeated --host flags.
+type hostList []string
+
+func (h *hostList) String() string { return strings.Join(*h, ",") }
+
+func (h *hostList) Set(v string) error {
+	if err := remote.ValidHost(v); err != nil {
+		return err
+	}
+	*h = append(*h, v)
+	return nil
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -62,6 +120,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfgPath := fs.String("config", "", "")
 	yes := fs.Bool("yes", false, "")
 	asJSON := fs.Bool("json", false, "")
+	format := fs.String("format", "", "")
+	var hosts hostList
+	fs.Var(&hosts, "host", "")
+	keepGoing := fs.Bool("keep-going", false, "")
+	check := fs.Bool("check", false, "")
 	help := fs.Bool("help", false, "")
 	fs.BoolVar(help, "h", false, "")
 	showVersion := fs.Bool("version", false, "")
@@ -89,6 +152,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unexpected argument %q\n\n%s", fs.Arg(0), usage)
 		return 2
 	}
+	outFormat, err := statusFormat(*format, *asJSON)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	remoteApply := len(hosts) > 0
+	switch {
+	case remoteApply && cmd != "apply":
+		fmt.Fprintln(stderr, "--host is only used with apply")
+		return 2
+	case *keepGoing && !remoteApply:
+		fmt.Fprintln(stderr, "--keep-going needs --host")
+		return 2
+	}
 
 	local := host.NewLocal()
 	// TOR_RELAY_SETUP_ROOT reads files from a fixture tree instead of /, for
@@ -101,20 +178,36 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		local.Root = root
 	}
+	// TOR_RELAY_SETUP_ONIONOO_URL points Tor Metrics lookups at a stand-in
+	// server (docs/demo/fakerelay); like the fixture root, dry runs only.
+	var dir onionoo.Client
+	if u := os.Getenv("TOR_RELAY_SETUP_ONIONOO_URL"); u != "" {
+		if !*dryRun {
+			fmt.Fprintln(stderr, "TOR_RELAY_SETUP_ONIONOO_URL is only allowed together with --dry-run")
+			return 2
+		}
+		dir.Base = u
+	}
 	var h host.Host = local
 	if *dryRun {
 		h = host.NewDryRun(local)
 	}
-	opt := tui.Options{Host: h, Version: buildVersion(), DryRun: *dryRun, ConfigPath: "relay.toml"}
+	opt := tui.Options{
+		Host: h, Version: buildVersion(), DryRun: *dryRun, ConfigPath: "relay.toml", Onionoo: dir,
+		// The console's "update available" hint asks the GitHub API at most
+		// once a day; dry runs and TOR_RELAY_SETUP_NO_UPDATE_CHECK skip it.
+		UpdateCheck: !*dryRun && os.Getenv("TOR_RELAY_SETUP_NO_UPDATE_CHECK") == "",
+	}
 	interactive := !*plain && tui.Interactive()
 
-	if !*dryRun && os.Geteuid() != 0 && (cmd == "" || cmd == "setup" || cmd == "apply" || cmd == "console" || cmd == "uninstall") {
+	// A remote apply needs no local root: the remote side uses sudo.
+	localChange := cmd == "" || cmd == "setup" || (cmd == "apply" && !remoteApply) || cmd == "console" || cmd == "uninstall"
+	if !*dryRun && os.Geteuid() != 0 && localChange {
 		fmt.Fprintln(stderr, "tor-relay-setup changes system configuration and must run as root.")
 		fmt.Fprintln(stderr, "Try: sudo tor-relay-setup   (or add --dry-run to look around without root)")
 		return 1
 	}
 
-	var err error
 	switch cmd {
 	case "":
 		if relayConfigured(h) {
@@ -129,6 +222,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "apply needs --config FILE")
 			return 2
 		}
+		if remoteApply {
+			err = applyRemote(remote.Options{ConfigPath: *cfgPath, Hosts: hosts, DryRun: *dryRun, KeepGoing: *keepGoing}, stdout)
+			break
+		}
 		var s config.Setup
 		if s, err = config.Load(*cfgPath); err == nil {
 			err = tui.RunApplyPlain(opt, s, system.Facts{}, *yes, stdin, stdout)
@@ -136,9 +233,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "console":
 		err = console(opt, interactive, stdout)
 	case "status":
-		return statusCmd(h, *asJSON, stdout)
+		return statusCmd(h, opt.Onionoo, outFormat, stdout)
 	case "uninstall":
-		err = uninstall(h, stdout)
+		err = uninstall(context.Background(), h, uninstallOptions{Yes: *yes, Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout})
+	case "self-update":
+		return selfUpdate(*check, *dryRun, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 		return 2
@@ -174,7 +273,7 @@ func console(opt tui.Options, interactive bool, stdout io.Writer) error {
 	if interactive {
 		return tui.RunConsole(opt)
 	}
-	if code := statusCmd(opt.Host, false, stdout); code != 0 {
+	if code := statusCmd(opt.Host, opt.Onionoo, "text", stdout); code != 0 {
 		return errors.New("the relay needs attention")
 	}
 	return nil
@@ -185,28 +284,92 @@ func relayConfigured(h host.Host) bool {
 	return err == nil && len(relay.ParseDocument(data).ORPorts()) > 0
 }
 
-func statusCmd(h host.Host, asJSON bool, stdout io.Writer) int {
+// statusFormat resolves --format and its --json shorthand.
+func statusFormat(format string, asJSON bool) (string, error) {
+	switch {
+	case asJSON && format != "" && format != "json":
+		return "", fmt.Errorf("--json conflicts with --format %s", format)
+	case asJSON:
+		return "json", nil
+	case format == "":
+		return "text", nil
+	case format == "text", format == "json", format == "prometheus":
+		return format, nil
+	}
+	return "", fmt.Errorf("unknown --format %q: use text, json, or prometheus", format)
+}
+
+// statusCmd prints the report. Text and JSON exit 1 when the relay needs
+// attention; Prometheus output always exits 0 (the warnings gauge carries
+// it) so that `status --format prometheus > f.tmp && mv f.tmp f` works.
+func statusCmd(h host.Host, dir onionoo.Client, format string, stdout io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	r := status.Collect(ctx, h, status.Options{})
 	if r.Relay.Fingerprint != "" {
-		d, err := status.Directory(ctx, onionoo.Client{}, r.Relay.Fingerprint)
+		d, err := status.Directory(ctx, dir, r.Relay.Fingerprint)
 		r.Directory = d
 		if err != nil {
 			r.DirectoryError = err.Error()
 		}
 	}
-	if asJSON {
+	switch format {
+	case "prometheus":
+		if err := r.WritePrometheus(stdout); err != nil {
+			return 1
+		}
+		return 0
+	case "json":
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(r)
-	} else {
+	default:
 		printStatus(stdout, r)
 	}
 	if !r.Healthy() {
 		return 1
 	}
 	return 0
+}
+
+func applyRemote(opt remote.Options, stdout io.Writer) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	_, err := newFleet(stdout).Apply(ctx, opt)
+	return err
+}
+
+func selfUpdate(check, dryRun bool, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	u := newUpdater(buildVersion(), stdout, dryRun)
+	if !check {
+		if err := u.Update(ctx); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
+		}
+		return 0
+	}
+	res, err := u.Check(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	current := res.Current
+	if !res.Known {
+		current += " (not a release build; the version is unknown)"
+	}
+	fmt.Fprintf(stdout, "current  %s\nlatest   %s\n", current, res.Latest)
+	switch {
+	case !res.Available:
+		fmt.Fprintln(stdout, "Up to date.")
+		return 0
+	case res.Known:
+		fmt.Fprintln(stdout, "An update is available: sudo tor-relay-setup self-update")
+	default:
+		fmt.Fprintln(stdout, "The latest release may be newer: sudo tor-relay-setup self-update")
+	}
+	return exitUpdateAvailable
 }
 
 func printStatus(w io.Writer, r status.Report) {
@@ -250,7 +413,15 @@ func printStatus(w io.Writer, r status.Report) {
 	}
 }
 
-func uninstall(h host.Host, stdout io.Writer) error {
+type uninstallOptions struct {
+	Yes      bool // remove the program without asking
+	Terminal bool // In is a terminal, so asking is possible
+	In       io.Reader
+	Out      io.Writer
+}
+
+func uninstall(ctx context.Context, h host.Host, opt uninstallOptions) error {
+	stdout := opt.Out
 	for _, p := range []string{"/var/lib/tor-relay-setup", "/var/log/tor-relay-setup"} {
 		if _, err := h.Stat(p); err != nil {
 			continue
@@ -264,10 +435,56 @@ func uninstall(h host.Host, stdout io.Writer) error {
 			fmt.Fprintln(stdout, "removed", p)
 		}
 	}
-	if exe, err := os.Executable(); err == nil {
-		fmt.Fprintf(stdout, "Tor, torrc, keys, and firewall rules were left alone.\nTo remove this program too: sudo rm %s\n", filepath.Clean(exe))
+	fmt.Fprintln(stdout, "Tor, torrc, keys, and firewall rules were left alone.")
+	return removeProgram(ctx, h, opt)
+}
+
+// removeProgram deletes the running binary after the state is gone, unless
+// the Debian package owns it.
+func removeProgram(ctx context.Context, h host.Host, opt uninstallOptions) error {
+	exe, err := executable()
+	if err != nil {
+		return nil
 	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	exe = filepath.Clean(exe)
+	if update.OwnedByPackage(ctx, h.Run, exe) {
+		fmt.Fprintln(opt.Out, "This program was installed from the .deb package; remove it with: sudo apt remove tor-relay-setup")
+		return nil
+	}
+	switch {
+	case h.DryRun():
+		fmt.Fprintln(opt.Out, "would remove", exe)
+		return nil
+	case opt.Yes:
+	case opt.Terminal:
+		fmt.Fprintf(opt.Out, "Remove %s too? [y/N] ", exe)
+		answer, _ := bufio.NewReader(opt.In).ReadString('\n')
+		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+			fmt.Fprintf(opt.Out, "Kept %s.\n", exe)
+			return nil
+		}
+	default:
+		fmt.Fprintf(opt.Out, "To remove this program too: sudo rm %s\n", exe)
+		return nil
+	}
+	if err := h.Remove(exe); err != nil {
+		return err
+	}
+	fmt.Fprintln(opt.Out, "removed", exe)
 	return nil
+}
+
+// isTerminal reports whether r is a terminal device.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func buildVersion() string {

@@ -1,6 +1,8 @@
 # Tor Relay Setup
 
 [![CI](https://github.com/ljkx/tor-relay-setup/actions/workflows/ci.yml/badge.svg)](https://github.com/ljkx/tor-relay-setup/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ljkx/tor-relay-setup/actions/workflows/codeql.yml/badge.svg)](https://github.com/ljkx/tor-relay-setup/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ljkx/tor-relay-setup/badge)](https://scorecard.dev/viewer/?uri=github.com/ljkx/tor-relay-setup)
 [![Release](https://img.shields.io/github/v/release/ljkx/tor-relay-setup?include_prereleases&sort=semver)](https://github.com/ljkx/tor-relay-setup/releases)
 [![Go](https://img.shields.io/github/go-mod/go-version/ljkx/tor-relay-setup)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -23,7 +25,8 @@ Set up and run a public **Tor relay** on Debian or Ubuntu from one small, signed
 - **Monthly quota pacing**, so a 10 TB VPS plan becomes a steady rate and the relay never hibernates halfway through the month.
 - **The rest of the setup:** firewall rules (SSH is always allowed first), a local Unbound resolver for exit DNS, unattended upgrades, Nyx, and an optional local-only MetricsPort.
 - **Verification before and after:** every torrc is checked by `tor --verify-config` before it replaces the live file. After Tor starts, the tool checks the service, the listener, family-key warnings, and Tor's own reachability self-test, which it keeps waiting for in the background.
-- **A dashboard for existing relays:** run it again on a configured relay and you get health, Tor Metrics, a live log, family management, settings, updates, and key backups.
+- **A dashboard for existing relays:** run it again on a configured relay and you get health, live traffic from the MetricsPort, a month of Tor Metrics history, a live log, family management, settings, updates, and key backups. It refreshes itself.
+- **Fleets and monitoring:** apply one `relay.toml` to many servers over SSH as one family, and export health for Prometheus.
 
 ## Install
 
@@ -41,7 +44,7 @@ sudo bash install.sh
 **Debian package** (`amd64` or `arm64`):
 
 ```bash
-VERSION=v3.0.0
+VERSION=v3.1.0
 ARCH=$(dpkg --print-architecture)
 curl -fsSLO "https://github.com/ljkx/tor-relay-setup/releases/download/${VERSION}/tor-relay-setup_${VERSION#v}_${ARCH}.deb"
 gh attestation verify "tor-relay-setup_${VERSION#v}_${ARCH}.deb" -R ljkx/tor-relay-setup   # optional
@@ -57,6 +60,8 @@ go install github.com/ljkx/tor-relay-setup/cmd/tor-relay-setup@latest
 ```
 
 </details>
+
+**Updating:** `sudo tor-relay-setup self-update` installs the newest release after the same checksum and provenance checks (`--check` only reports). The console's header shows when a newer release exists. A `.deb` install is updated with apt instead.
 
 ## Use
 
@@ -88,12 +93,24 @@ sudo tor-relay-setup apply --config relay.toml          # shows the plan, asks o
 sudo tor-relay-setup apply --config relay.toml --yes    # unattended, plain output
 ```
 
+Or apply it to a whole fleet from your workstation. It uses your own `ssh`, so `~/.ssh/config`, keys, and `known_hosts` all apply:
+
+```bash
+tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2 --dry-run
+tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2 --keep-going
+```
+
+Each host gets this binary and the config in a private temporary directory that is removed afterwards. With `family.mode = "generate"`, the first host creates the family key and every other host imports it, so the fleet is one family. The remote user must be root or have passwordless sudo.
+
 ### Monitoring
 
 ```bash
-tor-relay-setup status          # human summary, exit code 1 when something needs attention
-tor-relay-setup status --json   # the same report as JSON, for scripts and monitoring
+tor-relay-setup status                       # human summary, exit code 1 when something needs attention
+tor-relay-setup status --json                # the same report as JSON, for scripts
+tor-relay-setup status --format prometheus   # tor_relay_setup_* gauges for node_exporter's textfile collector
 ```
+
+For Prometheus, write the output to `tor_relay.prom.tmp` in the textfile directory from a timer, then `mv` it into place. The relay's own MetricsPort (`127.0.0.1:9035`) exposes Tor's detailed counters.
 
 ## The operator console
 
@@ -102,9 +119,14 @@ tor-relay-setup status --json   # the same report as JSON, for scripts and monit
        alt="Operator console: relay, health, family and traffic cards, Tor Metrics, recent log, the live log view, family sharing instructions, and a Tor update">
 </p>
 
+The dashboard keeps itself current:
+- **Live traffic** is read from the MetricsPort every 2 seconds: rates in each direction, a two-minute sparkline, and open connections.
+- **Health** is re-checked every 30 seconds.
+- **Tor Metrics** is fetched every 30 minutes, including a sparkline of the last month's traffic with totals in and out.
+
 | Key | Action | What it does |
 | --- | --- | --- |
-| `r` | Refresh | Re-reads everything; the cards load concurrently and Tor Metrics arrives asynchronously |
+| `r` | Refresh | Re-checks everything now, including Tor Metrics; the footer shows when the data was last updated |
 | `l` | Live logs | Follows the Tor journal in place, with self-test and warning lines highlighted |
 | `f` | Relay family | FamilyId status, create or rotate a key, import, share instructions, remove, legacy MyFamily cleanup |
 | `e` | Edit settings | Nickname, ContactInfo, bandwidth, MetricsPort, Sandbox. Verified by tor before anything is written. |
@@ -165,7 +187,11 @@ Nothing changes before you confirm the review screen. Every replaced file is fir
 | `/etc/hostname`, `/etc/hosts` | only if you rename the host |
 | `/var/lib/tor-relay-setup/state.json`, `/var/log/tor-relay-setup/*.log` | the tool's own state, and a log of each apply |
 
-There is no telemetry. The tool only contacts apt mirrors, `deb.torproject.org`, `onionoo.torproject.org` (for directory status), and the IPv6 directory authorities (for the optional IPv6 check).
+There is no telemetry. The tool only contacts:
+- apt mirrors and `deb.torproject.org`;
+- `onionoo.torproject.org`, for directory status and traffic history;
+- the IPv6 directory authorities, for the optional IPv6 check;
+- `api.github.com`, at most once a day from the console to see whether a newer release exists (`TOR_RELAY_SETUP_NO_UPDATE_CHECK=1` turns that off), and when you run `self-update`.
 
 ## Command reference
 
@@ -173,9 +199,13 @@ There is no telemetry. The tool only contacts apt mirrors, `deb.torproject.org`,
 tor-relay-setup [flags]                   console on a configured relay, otherwise the setup wizard
 tor-relay-setup setup [flags]             run the setup wizard
 tor-relay-setup apply --config FILE       apply a saved relay.toml (--yes skips the confirmation)
+tor-relay-setup apply --config FILE --host [user@]HOST [--host ...] [--keep-going]
+                                          apply it to remote relays over ssh, one after another
 tor-relay-setup console                   open the operator console
-tor-relay-setup status [--json]           relay health; exit code 1 when something needs attention
-tor-relay-setup uninstall                 remove this tool's state and logs (never Tor or its keys)
+tor-relay-setup status [--format text|json|prometheus]
+                                          relay health; text and json exit 1 when something needs attention
+tor-relay-setup self-update [--check]     install the newest verified release; --check exits 10 if one exists
+tor-relay-setup uninstall [--yes]         remove this tool's state, logs and binary (never Tor or its keys)
 tor-relay-setup version
 
 --dry-run   show every command and file change without making it (no root needed)
@@ -183,7 +213,7 @@ tor-relay-setup version
             (screen-reader friendly)
 ```
 
-`NO_COLOR=1` disables colour. The interface adapts to light and dark terminals.
+`NO_COLOR=1` disables colour. The interface adapts to light and dark terminals. `tor-relay-setup --help` lists every flag and exit code.
 
 ## Upgrading from 2.x
 
@@ -196,6 +226,7 @@ Version 3 replaces `setup-tor-guard-relay.sh`, and nothing needs migrating. Inst
   - The Tor signing key is pinned by fingerprint and verified in-process, and the `tor` package must come from `deb.torproject.org`.
   - Release binaries, `.deb` packages, and archives carry `SHA256SUMS`, SBOMs, and [Sigstore-signed build-provenance attestations](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations).
   - Builds are reproducible (`-trimpath`, fixed timestamps).
+  - `main` and release tags are protected by rulesets. Releases need a maintainer's approval, and CodeQL and [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/ljkx/tor-relay-setup) run continuously.
 - ContactInfo, nickname, fingerprint, and FamilyId are **public**. Identity and family keys are secret: back them up (console → `b`) and share them only with your own relays.
 
 Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
@@ -208,7 +239,13 @@ make integration   # real Tor apt setup, keygen and tor --verify-config in a Deb
 make demo          # re-record the GIFs above with VHS
 ```
 
-CI runs the container integration test on every supported distribution (plus arm64) and also runs it weekly. See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture and how the tests are organised, and [docs/RELEASE.md](docs/RELEASE.md) for how releases are cut.
+CI tests at several levels:
+- the container integration test on every supported distribution (plus arm64), also run weekly;
+- a real, unattended install on a fresh Ubuntu 24.04 VM, with systemd, the firewall, and the running relay checked through `status --json`;
+- screen snapshots of the TUI;
+- a nightly canary against Tor's nightly and experimental packages.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture and how the tests are organised, and [docs/RELEASE.md](docs/RELEASE.md) for how releases are cut.
 
 ## References
 

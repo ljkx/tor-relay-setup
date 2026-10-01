@@ -78,14 +78,18 @@ func (r *review) render(a *App) string {
 	}
 
 	bw, _ := s.Bandwidth.Resolve()
-	bwText := "no limit"
+	bwText, capText := "no limit", "none"
 	switch bw.Mode {
 	case relay.BandwidthSteady:
-		bwText = fmt.Sprintf("≈ %.1f Mbit/s steady · %d GBytes/month fuse", relay.MbitFromKBytes(bw.RateKBytes), bw.AccountingMaxGBytes)
+		bwText = fmt.Sprintf("≈ %.1f Mbit/s steady", relay.MbitFromKBytes(bw.RateKBytes))
+		capText = fmt.Sprintf("%d GBytes/month (safety cap)", bw.AccountingMaxGBytes)
 	case relay.BandwidthManual:
 		bwText = fmt.Sprintf("%d Mbit/s, burst %d", bw.RateMbit, bw.BurstMbit)
 	case relay.BandwidthAccounting:
-		bwText = fmt.Sprintf("full speed until %d GBytes/month", bw.AccountingMaxGBytes)
+		bwText = "full speed"
+	}
+	if capText == "none" && bw.AccountingMaxGBytes > 0 {
+		capText = fmt.Sprintf("%d GBytes/month", bw.AccountingMaxGBytes)
 	}
 	host := "unchanged"
 	if s.System.Hostname != "" {
@@ -93,6 +97,7 @@ func (r *review) render(a *App) string {
 	}
 	sysRows := [][2]string{
 		{"Bandwidth", bwText},
+		{"Monthly cap", capText},
 		{"Updates", yesNo(s.System.UnattendedUpgrades) + " (security + Tor Project)"},
 		{"Firewall", s.System.Firewall},
 		{"MetricsPort", map[bool]string{true: config.DefaultMetricsPort + " (local only)", false: "off"}[s.Relay.MetricsPort]},
@@ -103,11 +108,17 @@ func (r *review) render(a *App) string {
 
 	steps := plan.Build(s, a.checks.Facts)
 	var changes strings.Builder
+	wrap := lipgloss.NewStyle().Width(max(w-7, 20)) // panel frame 4, number 3
 	for i, c := range plan.Changes(steps) {
 		if i > 0 {
 			changes.WriteString("\n")
 		}
-		changes.WriteString(t.Faintly.Render(fmt.Sprintf("%2d ", i+1)) + c)
+		// Long changes wrap with a hanging indent under their text.
+		lines := strings.Split(wrap.Render(c), "\n")
+		changes.WriteString(t.Faintly.Render(fmt.Sprintf("%2d ", i+1)) + strings.TrimRight(lines[0], " "))
+		for _, l := range lines[1:] {
+			changes.WriteString("\n   " + strings.TrimRight(l, " "))
+		}
 	}
 
 	cfg := s.RelayConfig(nil)

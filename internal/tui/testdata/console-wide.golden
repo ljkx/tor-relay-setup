@@ -1,0 +1,44 @@
+ ◆ tor-relay-setup vtest                                                                                                           old-host
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭────────────────────────────────╮ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
+│ Actions                        │ │ Relay                                           │ │ Health                                          │
+│  r  Refresh                    │ │ Nickname     GoodRelay                          │ │ Service       ✓ running                         │
+│     Re-check everything now    │ │ Fingerprint  ABCDEF01…ABCDEF01                  │ │ tor           ✓ 0.4.9.3                         │
+│  l  Live logs                  │ │ Mode         guard / middle                     │ │ Listener      ✓ TCP 9001                        │
+│  f  Relay family               │ │ ORPort       9001 (IPv4 + IPv6)                 │ │ Reachability  ✓ reachable (IPv4 + IPv6)         │
+│  e  Edit settings              │ ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
+│  s  Restart Tor                │ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
+│  o  Reload Tor                 │ │ Family                                          │ │ Traffic                                         │
+│  p  Stop / start Tor           │ │ ✓  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  │ │ Limit        1640 KBytes (burst 8200 KBytes)    │
+│  u  Update Tor                 │ │                                                 │ │ Accounting   8381 GBytes per month, rule sum    │
+│  b  Back up keys               │ │                                                 │ │ MetricsPort  127.0.0.1:9035                     │
+│  w  Reconfigure                │ │                                                 │ │ Live         ↓ 148.0 Mbit/s  ↑ 140.6 Mbit/s     │
+│  q  Quit                       │ │                                                 │ │              ▁▂▂▂▃▃▃▄▄▅▅▅▆▆▆▇▇██ 38s            │
+╰────────────────────────────────╯ │                                                 │ │ Connections  1480 OR                            │
+                                   │                                                 │ │ Sandbox      yes                                │
+                                   ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
+                                   ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+                                   │ Tor Metrics                                                                                         │
+                                   │ Status      ✓ running                                                                               │
+                                   │ Flags       Fast Guard Running Stable Valid                                                         │
+                                   │ Advertised  104.8 Mbit/s                                                                            │
+                                   │ Weight      41200                                                                                   │
+                                   │ First seen  2026-03-14 08:00:00                                                                     │
+                                   │ 30 days     ▆▇▇████▇▇▆▆▅▄▄▄▄▄▅▅▆▇▇████▇▇▆▆                                                          │
+                                   │             in 14.0 TB · out 14.0 TB                                                                │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                   ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+                                   │ Recent log  (l opens the live view)                                                                 │
+                                   │ Oct 01 09:12:31 Tor[812]: Self-testing indicates your ORPort 203.0.113.5:9001 is reachable from th… │
+                                   │ Oct 01 10:00:00 Tor[812]: Heartbeat: Tor's uptime is 1 day 0:00 hours, with 1412 circuits open.     │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+ ↑/↓ select  ·  enter run  ·  r refresh  ·  q quit
