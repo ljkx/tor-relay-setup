@@ -2,6 +2,56 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+Version 3 rewrites the tool as a single static Go binary with a Bubble Tea interface. It replaces `setup-tor-guard-relay.sh`. Existing relays need no migration: the console reads the current torrc, and **Reconfigure** keeps its family and bandwidth limits.
+
+### Added
+
+- **Setup wizard** (Bubble Tea v2 + Huh):
+  - A step indicator with back-navigation, inline validation, a **live torrc preview**, and a panel of facts about the server.
+  - Those facts are detected concurrently at start-up: release, memory, Tor repository availability, IPv6 reachability, firewall, and SSH ports.
+- **Review screen**: every setting, a numbered list of every privileged change, and the full highlighted torrc. `s` saves the answers as `relay.toml`.
+- **Apply screen**:
+  - A live checklist with per-step timings and notes, an overall progress bar driven by apt's `APT::Status-Fd`, and a collapsible output log written to `/var/log/tor-relay-setup/`.
+  - On failure: a clear error, a hint, and retry.
+  - Waits for Tor's reachability self-test in the background, with a timer.
+- **Operator console**:
+  - Health, family, traffic, and Tor Metrics cards that load concurrently, plus a recent-log panel.
+  - A live log viewer, relay family management (create, rotate, import, share, remove, legacy MyFamily cleanup), and an editor for settings, all verified by tor before anything is written.
+  - Restart, reload, stop and start with confirmation; Tor updates with progress; key backups; and **Reconfigure** pre-filled from the running torrc.
+- **`apply --config relay.toml [--yes]`** for repeatable, unattended setups; example in `docs/examples/relay.toml`.
+- **`status [--json]`**: a machine-readable health report, with exit code 1 when something needs attention.
+- **`--plain`**: accessible line-by-line prompts and output, used automatically without a terminal.
+- Light and dark terminal themes in Tor purple, and `NO_COLOR` support.
+- **Distribution:**
+  - GoReleaser builds static `amd64`/`arm64` binaries, `.tar.gz` archives, and `.deb` packages.
+  - Every release ships SBOMs, `SHA256SUMS`, and Sigstore build-provenance attestations.
+  - `install.sh` downloads and verifies a release.
+
+### Changed
+
+- **Speed:**
+  - One `apt-get update` and one install transaction instead of up to four updates and eight installs.
+  - apt waits out a held lock (`DPkg::Lock::Timeout`) instead of failing on a fresh VPS.
+  - The signing key is fetched and verified in-process, so gpg and wget are no longer needed.
+  - Server checks take about 55 ms, and a full dry run finishes in under a second.
+  - No more "press Enter" command windows.
+- **IPv6 check:** now a concurrent TCP probe of the directory authorities' ORPorts. It works without ICMP or root, and the result appears next to each detected address.
+- **Repository origin check:** the apt candidate must match the Tor repository URI exactly; look-alike paths are rejected.
+- **Version:** the build version comes from the release tag; there is no version string in the code.
+
+### Removed
+
+- The Bash script, its fzf interface, and the bats test suites. They are replaced by Go packages with unit, fake-host, end-to-end and container integration tests.
+
+### Development
+
+- Go 1.27 module with `internal/host` as the only code that touches the system (real, dry-run, and fake implementations).
+- golangci-lint v2 (including gosec), govulncheck, ShellCheck, and shfmt, all pinned.
+- **CI:** race-detector tests, amd64/arm64 builds, fixture-driven end-to-end dry runs of the binary, the real installation path on Debian 12/13 and Ubuntu 22.04/24.04/26.04 (plus arm64), and zizmor.
+- The README GIFs are recorded with VHS from `docs/demo/*.tape`; a Demo workflow re-records them on pull requests that touch the UI.
+
 ## v2.0.0-beta.1 - 2026-10-01
 
 ### Added

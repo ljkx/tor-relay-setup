@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags: [integration]
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nolintlint
+    - revive
+    - unconvert
+    - usestdlibvars
+  settings:
+    gosec:
+      excludes:
+        - G204 # running commands is this tool's job; every argv is built from validated values
+        - G304 # reading operator-supplied paths (family keys, config) is intended
+        - G301 # key directories use 0700, state 0700; others follow Debian defaults
+        - G306 # torrc and apt configs are 0644 on Debian by design
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+  exclusions:
+    presets: [comments, std-error-handling]
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck]
+
+formatters:
+  enable: [gofmt, goimports]
+  settings:
+    goimports:
+      local-prefixes: [github.com/ljkx/tor-relay-setup]

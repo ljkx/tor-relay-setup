@@ -12,8 +12,8 @@ body:
     id: version
     attributes:
       label: Script version
-      description: Output of `./setup-tor-guard-relay.sh --version`
-      placeholder: "setup-tor-guard-relay.sh 2.0.0-beta.1"
+      description: Output of `tor-relay-setup version`
+      placeholder: "tor-relay-setup v3.0.0-beta.1"
     validations:
       required: true
   - type: input
@@ -34,13 +34,15 @@ body:
     attributes:
       label: Where did it happen?
       options:
-        - Guided setup (guard/middle)
-        - Guided setup (exit)
+        - Setup wizard (guard/middle)
+        - Setup wizard (exit)
+        - apply --config
+        - Operator console — relay family
+        - Operator console — other action
+        - status / status --json
         - Dry run
-        - Operator console — relay family / MyFamily
-        - Operator console — other menu
-        - Uninstall / cleanup
-        - Release download / verification
+        - uninstall
+        - Installation / release verification
     validations:
       required: true
   - type: dropdown
@@ -48,8 +50,8 @@ body:
     attributes:
       label: Interface
       options:
-        - fzf
-        - plain (--plain or fzf not installed)
+        - full-screen interface
+        - plain (--plain, or no terminal)
   - type: textarea
     id: expected
     attributes:
@@ -60,7 +62,7 @@ body:
     id: actual
     attributes:
       label: Actual behaviour and output
-      description: Paste the relevant output. Console → Command logs shows captured command output.
+      description: Paste the relevant output. Each apply writes a full log to /var/log/tor-relay-setup/.
       render: text
     validations:
       required: true
@@ -68,7 +70,7 @@ body:
     id: checks
     attributes:
       label: Checks already run
-      description: For example `tor --verify-config -f /etc/tor/torrc`, `journalctl -u tor@default -n 50`, `systemctl status tor@default`, or Relay Search.
+      description: For example `tor-relay-setup status --json`, `tor --verify-config -f /etc/tor/torrc`, or `journalctl -u tor@default -n 50`.
       render: text
   - type: checkboxes
     id: safety

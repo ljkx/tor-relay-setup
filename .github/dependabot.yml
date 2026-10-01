@@ -1,10 +1,24 @@
 version: 2
 updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # Let new releases age a week before proposing them.
+    cooldown:
+      default-days: 7
+    groups:
+      charm:
+        patterns: ["charm.land/*", "github.com/charmbracelet/*"]
+      go-dependencies:
+        patterns: ["*"]
+    commit-message:
+      prefix: deps
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    # Let new action releases age a week before proposing them.
     cooldown:
       default-days: 7
     groups:
