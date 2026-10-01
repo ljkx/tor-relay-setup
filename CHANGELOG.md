@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Fixed
+
+- `install.sh` selected the archive line in `SHA256SUMS` by prefix, so it also tried to check the SBOM listed after it and refused to install. It now matches the exact file name. A CI job runs the installer against the newest release on Debian and Ubuntu.
+
 ## v3.0.0 - 2026-10-01
 
 Version 3 rewrites the tool as a single static Go binary with a Bubble Tea interface. It replaces `setup-tor-guard-relay.sh`. Existing relays need no migration: the console reads the current torrc, and **Reconfigure** keeps its family and bandwidth limits.
