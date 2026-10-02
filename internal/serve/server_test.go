@@ -708,3 +708,25 @@ func TestDemoMetricsCoverTheContract(t *testing.T) {
 }
 
 func addr(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+// A second load of the login page (another tab, a reload) keeps the form
+// token the browser already holds, so the first page still signs in.
+func TestLoginPageKeepsTheBrowsersFormToken(t *testing.T) {
+	h := newHarness(t, nil)
+	first := cookie(h.do(req{target: "/"}), "__Host-trs-login")
+	if first == nil {
+		t.Fatal("no login cookie")
+	}
+	again := h.do(req{target: "/", cookies: []*http.Cookie{first}})
+	if c := cookie(again, "__Host-trs-login"); c == nil || c.Value != first.Value {
+		t.Errorf("token rotated on reload: %v", again.Cookies())
+	}
+	if !strings.Contains(readBody(t, again), first.Value) {
+		t.Error("the page does not carry the kept token")
+	}
+	// A malformed cookie is replaced.
+	bad := h.do(req{target: "/", cookies: []*http.Cookie{{Name: "__Host-trs-login", Value: "short"}}})
+	if c := cookie(bad, "__Host-trs-login"); c == nil || c.Value == "short" || !validToken(c.Value) {
+		t.Errorf("malformed token kept: %v", bad.Cookies())
+	}
+}

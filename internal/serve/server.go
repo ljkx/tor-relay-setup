@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"html/template"
@@ -257,12 +258,27 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	s.loginForm(w, r, http.StatusOK, "")
 }
 
-// loginForm renders the login page with a fresh form token, which is also
-// set as a SameSite=Strict cookie (double submit).
+// loginForm renders the login page with a form token, which is also set as
+// a SameSite=Strict cookie (double submit). A valid token the browser
+// already holds is kept, so a second tab or a reload does not invalidate a
+// login page that is already open.
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request, code int, msg string) {
 	token := randomID(32)
+	if c, err := r.Cookie(s.cookieName(r, loginCookie)); err == nil && validToken(c.Value) {
+		token = c.Value
+	}
 	s.setCookie(w, r, loginCookie, token, int(loginFormTTL.Seconds()))
 	s.render(w, code, "login.html", pageData{CSRF: token, Error: msg})
+}
+
+// validToken reports whether s has the shape randomID(32) produces: 43
+// characters of unpadded URL-safe base64.
+func validToken(s string) bool {
+	if len(s) != 43 {
+		return false
+	}
+	_, err := base64.RawURLEncoding.DecodeString(s)
+	return err == nil
 }
 
 func equal(a, b string) bool {
