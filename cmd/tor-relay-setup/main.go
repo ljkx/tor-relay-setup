@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ljkx/tor-relay-setup/internal/alert"
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/fleet"
 	"github.com/ljkx/tor-relay-setup/internal/host"
@@ -62,8 +63,11 @@ Usage:
   tor-relay-setup status --format text|json|prometheus
                                             prometheus: node_exporter metrics; always exits 0
   tor-relay-setup status --all              every relay instance on this server (json: an array)
-  tor-relay-setup uninstall [--yes]        remove this tool's state and logs, then offer to remove
-                                            the program itself (never Tor or its keys)
+  tor-relay-setup alert run|test|install|uninstall
+                                            notify about problems (ntfy, webhook, email, command);
+                                            install adds a systemd timer (see alert --help)
+  tor-relay-setup uninstall [--yes]         remove this tool's state, logs and alert timer, then offer
+                                            to remove the program itself (never Tor or its keys)
   tor-relay-setup self-update [--check]     install the newest release, verified like install.sh;
                                             --check only compares versions
   tor-relay-setup version
@@ -81,7 +85,7 @@ Flags:
   --parallel N     apply --inventory: servers applied at once after the family host
   --only LIST      apply --inventory, fleet: only these hosts or nicknames (comma-separated)
   --check          self-update: only report whether a newer release exists
-  --instance NAME  the tor instance for status, console, setup and apply (overrides
+  --instance NAME  the tor instance for status, console, setup, apply and tor (overrides
                    relay.instance); "default" is /etc/tor/torrc
   --all            status: report every relay instance on this server
 
@@ -652,6 +656,12 @@ type uninstallOptions struct {
 
 func uninstall(ctx context.Context, h host.Host, opt uninstallOptions) error {
 	stdout := opt.Out
+	// The alert timer runs this program; remove it before the program goes.
+	if _, err := h.Stat(alert.TimerPath); err == nil {
+		if err := alert.Uninstall(ctx, h, stdout); err != nil {
+			return err
+		}
+	}
 	for _, p := range []string{"/var/lib/tor-relay-setup", "/var/log/tor-relay-setup"} {
 		if _, err := h.Stat(p); err != nil {
 			continue
