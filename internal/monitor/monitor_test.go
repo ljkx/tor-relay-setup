@@ -630,7 +630,7 @@ func TestAuthorizeFiles(t *testing.T) {
 		t.Errorf("authorized_keys:\n%s", AuthorizedKeysFile(o))
 	}
 	sudoers := string(SudoersFile(o.Binary))
-	if !strings.Contains(sudoers, "tor-relay-probe ALL=(root) NOPASSWD: /usr/local/bin/tor-relay-setup fleet-probe\n") || !strings.Contains(sudoers, "env_reset") {
+	if !strings.Contains(sudoers, "tor-relay-probe ALL=(root) NOPASSWD: /usr/local/bin/tor-relay-setup fleet-probe\n") || !strings.Contains(sudoers, "env_reset") || strings.Contains(sudoers, "requiretty") {
 		t.Errorf("sudoers:\n%s", sudoers)
 	}
 	for _, bad := range []AuthorizeOptions{
