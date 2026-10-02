@@ -30,6 +30,39 @@ func (d *Document) ExitPolicySettings() (ExitPolicy, []string) {
 	return PolicyCustom, entries
 }
 
+// ActsAsExit reports whether this torrc makes tor an exit relay. ExitRelay
+// 1 always counts and ExitRelay 0 never does. With ExitRelay unset or auto,
+// tor exits when ReducedExitPolicy 1 is set or an ExitPolicy accepts
+// anything; a policy that only rejects (reject *:*) is not an exit. It errs
+// on the side of "exit": an accept entry counts even if tor would reject
+// its addresses anyway (private ranges).
+func (d *Document) ActsAsExit() bool {
+	first := func(key string) string {
+		v, _ := d.Get(key)
+		if f := strings.Fields(v); len(f) > 0 {
+			return strings.ToLower(f[0])
+		}
+		return ""
+	}
+	switch first("ExitRelay") {
+	case "1":
+		return true
+	case "0":
+		return false
+	}
+	if first("ReducedExitPolicy") == "1" {
+		return true
+	}
+	for _, v := range d.GetAll("ExitPolicy") {
+		for _, e := range SplitPolicy(v) {
+			if strings.HasPrefix(strings.ToLower(e), "accept") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // SetExitPolicy replaces ReducedExitPolicy, every ExitPolicy line and
 // IPv6Exit with the lines for p (entries are used by PolicyCustom). The new
 // lines go where the old ones were, else right after ExitRelay, else at the

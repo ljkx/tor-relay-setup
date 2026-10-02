@@ -53,6 +53,13 @@ func TestMonitorUsageErrors(t *testing.T) {
 		{[]string{"monitor", "install", "--purge"}, 2, "--purge is only used"},
 		{[]string{"monitor", "status", "--yes"}, 2, "takes no --yes"},
 		{[]string{"monitor", "install", "extra"}, 2, "unexpected argument"},
+		{[]string{"monitor", "install", "--local", "--domain", "g.example.org"}, 2, "--local and --domain exclude each other"},
+		{[]string{"monitor", "install", "--domain", "g.example.org", "--local", "--dry-run"}, 2, "--local and --domain exclude each other"},
+		{[]string{"monitor", "install", "--local", "--email", "ops@example.org"}, 2, "--email is not used with --local"},
+		{[]string{"monitor", "install", "--local", "--fleet-path", "/fleet"}, 2, "--fleet-path is not used with --local"},
+		{[]string{"monitor", "install", "--local", "--fleet-path", "/stats"}, 2, "only --fleet-path off is accepted"},
+		{[]string{"monitor", "status", "--local"}, 2, "only used with monitor install"},
+		{[]string{"monitor", "uninstall", "--local"}, 2, "only used with monitor install"},
 		{[]string{"fleet", "authorize", "--remove", "--key", "x"}, 2, "--remove takes no"},
 		{[]string{"fleet", "authorize", "--dry-run"}, 2, "--key is required"},
 		{[]string{"fleet", "authorize", "--dry-run", "--key", "ssh-rsa AAAA x"}, 2, "ssh-ed25519"},
@@ -65,7 +72,8 @@ func TestMonitorUsageErrors(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if code := run([]string{"monitor", "--help"}, strings.NewReader(""), &out, &out); code != 0 || !strings.Contains(out.String(), "monitor install --domain NAME") {
+	if code := run([]string{"monitor", "--help"}, strings.NewReader(""), &out, &out); code != 0 || !strings.Contains(out.String(), "monitor install --domain NAME") ||
+		!strings.Contains(out.String(), "monitor install --local") || !strings.Contains(out.String(), "ssh -N -L 3000:127.0.0.1:3000 USER@HOST") {
 		t.Errorf("help: %d %s", code, out.String())
 	}
 	out.Reset()

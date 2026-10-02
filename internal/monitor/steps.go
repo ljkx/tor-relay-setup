@@ -35,8 +35,14 @@ type Install struct {
 	Health func(ctx context.Context, url string) error
 	// LookupHost resolves the domain for the preflight note.
 	LookupHost func(ctx context.Context, name string) ([]string, error)
+	// Getenv reads SUDO_USER and SSH_CONNECTION for the tunnel command.
+	Getenv func(string) string
+	// Previous is the state of an earlier install; a switch from public
+	// to local mode retires Caddy and the public firewall rules.
+	Previous State
 
 	// Filled in while running.
+	Tunnel      Tunnel // local mode: how operators reach Grafana
 	NewPackages []string
 	Password    string // set when this run generated the admin password
 	PublicKey   string // the monitor's SSH public key
@@ -62,6 +68,7 @@ func NewInstall(o Options, f system.Facts) (*Install, error) {
 		Opt: o, Facts: f, Release: rel,
 		Health:     waitHealthy,
 		LookupHost: net.DefaultResolver.LookupHost,
+		Getenv:     os.Getenv,
 		changed:    map[string]bool{},
 	}, nil
 }
@@ -73,24 +80,31 @@ func orUnknown(s string) string {
 	return s
 }
 
-// Packages is the single apt transaction.
+// Packages is the single apt transaction. Local mode installs no Caddy.
 func (in *Install) Packages() []string {
 	pkgs := []string{"prometheus", "grafana", "caddy", "openssh-client"}
+	if in.Opt.Local {
+		pkgs = slices.DeleteFunc(pkgs, func(p string) bool { return p == "caddy" })
+	}
 	if in.installUFW() {
 		pkgs = append(pkgs, "ufw")
 	}
 	return pkgs
 }
 
+// installUFW: public mode installs ufw where no firewall manager exists.
+// Local mode opens no port, so it installs and enables no firewall either:
+// on a running relay, a firewall that allows only SSH would cut off the
+// ORPort.
 func (in *Install) installUFW() bool {
 	k := in.Facts.Firewall.Kind
-	return k == "" || k == system.KindNone
+	return !in.Opt.Local && (k == "" || k == system.KindNone)
 }
 
 // Repos are the third-party repositories this release needs.
 func (in *Install) Repos() []Repo {
 	repos := []Repo{GrafanaRepo}
-	if in.Release.CaddyRepo {
+	if in.Release.CaddyRepo && !in.Opt.Local {
 		repos = append(repos, CaddyRepo)
 	}
 	return repos
@@ -99,21 +113,37 @@ func (in *Install) Repos() []Repo {
 // Steps returns the ordered plan. Firewall and the Prometheus defaults
 // come before anything listens: Prometheus starts on loopback right away,
 // and Grafana gets its administrator password before its first start.
+// Local mode has no Caddy step; switching to it retires the public front.
 func (in *Install) Steps() []plan.Step {
-	return []plan.Step{
+	steps := []plan.Step{
 		in.preflightStep(),
 		in.repositoryStep(),
 		in.prometheusDefaultsStep(),
 		in.updateStep(),
 		in.packagesStep(),
 		in.firewallStep(),
+	}
+	if in.switchingToLocal() {
+		steps = append(steps, in.retirePublicStep())
+	}
+	steps = append(steps,
 		in.monitorUserStep(),
 		in.prometheusStep(),
 		in.fleetServiceStep(),
 		in.grafanaStep(),
-		in.caddyStep(),
-		in.stateStep(),
+	)
+	if !in.Opt.Local {
+		steps = append(steps, in.caddyStep())
 	}
+	return append(steps, in.stateStep())
+}
+
+// installCommand is how this install is run again.
+func (in *Install) installCommand() string {
+	if in.Opt.Local {
+		return "sudo tor-relay-setup monitor install --local"
+	}
+	return "sudo tor-relay-setup monitor install --domain " + in.Opt.Domain
 }
 
 func (in *Install) preflightStep() plan.Step {
@@ -125,7 +155,7 @@ func (in *Install) preflightStep() plan.Step {
 				return errors.New(strings.Join(problems, "; "))
 			}
 			if !h.DryRun() && in.Facts.EUID != 0 {
-				return errors.New("run as root, for example: sudo tor-relay-setup monitor install --domain " + in.Opt.Domain)
+				return errors.New("run as root, for example: " + in.installCommand())
 			}
 			if in.Facts.MemTotalMiB > 0 && in.Facts.MemTotalMiB < 1024 {
 				r.Note(plan.Warn, fmt.Sprintf("%d MiB RAM: Grafana and Prometheus want at least 1 GiB", in.Facts.MemTotalMiB))
@@ -133,15 +163,27 @@ func (in *Install) preflightStep() plan.Step {
 			if in.Facts.DiskFreeMiB > 0 && in.Facts.DiskFreeMiB < 4096 {
 				r.Note(plan.Warn, fmt.Sprintf("only %d MiB free under /var; Prometheus keeps up to %s of history", in.Facts.DiskFreeMiB, RetentionSize))
 			}
-			if found, _ := relay.Discover(h); len(found) > 0 {
-				r.Note(plan.Warn, "This server also runs a Tor relay. A separate management server is recommended: a relay's address is public, and Grafana does not need to be next to it")
+			if in.Opt.Local {
+				if err := in.checkRelaysLocal(h, r); err != nil {
+					return err
+				}
+			} else if found, _ := relay.Discover(h); len(found) > 0 {
+				r.Note(plan.Warn, "This server also runs a Tor relay. A separate management server is recommended: a relay's address is public, and Grafana does not need to be next to it (or use monitor install --local on a non-exit relay: no public service, SSH tunnel only)")
+			}
+			switch {
+			case in.switchingToLocal():
+				r.Note(plan.Info, "Switching from public mode (https://"+in.Previous.Domain+"/) to local mode: Caddy is stopped and the TCP 80/443 rules this tool added are removed")
+			case !in.Opt.Local && in.Previous.Local():
+				r.Note(plan.Info, "Switching from local mode to public mode: Caddy will publish Grafana at "+in.Opt.URL()+" and TCP 80 and 443 will be open")
 			}
 			for _, repo := range in.Repos() {
 				if dup := duplicateSources(h, repo); len(dup) > 0 {
 					return fmt.Errorf("%s already configures the %s repository; remove it (apt rejects the same repository with two different Signed-By keys)", strings.Join(dup, ", "), repo.Name)
 				}
 			}
-			if in.LookupHost != nil {
+			if in.Opt.Local {
+				in.Tunnel = DetectTunnel(h, in.Facts, in.Getenv)
+			} else if in.LookupHost != nil {
 				lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				addrs, err := in.LookupHost(lctx, in.Opt.Domain)
 				cancel()
@@ -275,7 +317,10 @@ func (in *Install) updateStep() plan.Step {
 func (in *Install) packagesStep() plan.Step {
 	pkgs := in.Packages()
 	src := "Prometheus and Caddy from " + in.Release.Name + ", Grafana OSS from apt.grafana.com"
-	if in.Release.CaddyRepo {
+	switch {
+	case in.Opt.Local:
+		src = "Prometheus from " + in.Release.Name + ", Grafana OSS from apt.grafana.com; no Caddy in local mode"
+	case in.Release.CaddyRepo:
 		src = "Prometheus from " + in.Release.Name + ", Grafana OSS from apt.grafana.com, Caddy from Caddy's repository"
 	}
 	return plan.Step{
@@ -307,13 +352,26 @@ func (in *Install) packagesStep() plan.Step {
 }
 
 // firewallCommands opens TCP 80 and 443 next to the existing SSH ports.
+// Local mode opens nothing.
 func (in *Install) firewallCommands() []host.Command {
-	ports := []system.Port{{Number: 80, Label: "HTTP (Caddy: ACME and redirect)"}, {Number: 443, Label: "HTTPS (Caddy: Grafana)"}}
+	if in.Opt.Local {
+		return nil
+	}
 	fw := in.Facts.Firewall
-	return system.FirewallCommandsFor(fw, ports, in.Facts.SSHPorts, true, in.installUFW())
+	return system.FirewallCommandsFor(fw, publicPorts(), in.Facts.SSHPorts, true, in.installUFW())
 }
 
 func (in *Install) firewallStep() plan.Step {
+	if in.Opt.Local {
+		return plan.Step{
+			ID: "firewall", Title: "Open no port (local mode)", Weight: 1,
+			Changes: []string{"No firewall change: in local mode Grafana (3000), Prometheus (9090) and fleet serve (9850) listen on 127.0.0.1 only, and nothing new is reachable from outside"},
+			Run: func(ctx context.Context, e *plan.Env, r plan.Reporter) error {
+				r.Note(plan.Info, "No port opened: Grafana is reached through an SSH tunnel to 127.0.0.1:3000")
+				return nil
+			},
+		}
+	}
 	cmds := in.firewallCommands()
 	changes := make([]string, 0, len(cmds))
 	for _, c := range cmds {
@@ -728,13 +786,22 @@ func checkCaddy(ctx context.Context, h host.Host, data []byte, r plan.Reporter) 
 type State struct {
 	Version     string    `json:"version"`
 	InstalledAt time.Time `json:"installed_at"`
-	Domain      string    `json:"domain"`
-	AdminUser   string    `json:"admin_user"`
-	FleetPath   string    `json:"fleet_path,omitempty"`
-	Inventory   string    `json:"inventory"`
-	NewPackages []string  `json:"new_packages,omitempty"`
-	Repos       []string  `json:"repos,omitempty"` // sources files this tool wrote
+	// Mode is ModeLocal or ModePublic; states written before local mode
+	// existed have none and are public.
+	Mode        string   `json:"mode,omitempty"`
+	Domain      string   `json:"domain"`
+	AdminUser   string   `json:"admin_user"`
+	FleetPath   string   `json:"fleet_path,omitempty"`
+	Inventory   string   `json:"inventory"`
+	NewPackages []string `json:"new_packages,omitempty"`
+	Repos       []string `json:"repos,omitempty"` // sources files this tool wrote
 }
+
+// Installed reports whether monitor install recorded a setup.
+func (s State) Installed() bool { return s.Domain != "" || s.Mode == ModeLocal }
+
+// Local reports whether the recorded setup is in local mode.
+func (s State) Local() bool { return s.Mode == ModeLocal }
 
 // ReadState reads the state file; a missing file is the zero State.
 func ReadState(h host.Host) (State, error) {
@@ -756,7 +823,7 @@ func (in *Install) stateStep() plan.Step {
 			h := e.Host
 			old, _ := ReadState(h)
 			s := State{
-				Version: in.Opt.Version, InstalledAt: e.Now().UTC(), Domain: in.Opt.Domain,
+				Version: in.Opt.Version, InstalledAt: e.Now().UTC(), Mode: in.Opt.Mode(), Domain: in.Opt.Domain,
 				AdminUser: in.Opt.AdminUser, FleetPath: in.Opt.FleetPath, Inventory: in.Opt.Inventory,
 			}
 			// Packages this tool installed at any run stay "ours".
@@ -807,8 +874,12 @@ func waitHealthy(ctx context.Context, url string) error {
 
 // SummaryLines is the final message of a successful install.
 func (in *Install) SummaryLines() []string {
+	grafana := in.Opt.URL()
+	if in.Opt.Local {
+		grafana = strings.TrimSuffix(LocalGrafanaURL, "/") + " via an SSH tunnel (nothing listens publicly)"
+	}
 	lines := []string{
-		"Grafana        " + in.Opt.URL(),
+		"Grafana        " + grafana,
 		"Admin user     " + in.Opt.AdminUser,
 		"Password file  " + AdminPasswordPath + " (root only; back it up in your password manager)",
 	}
@@ -817,6 +888,15 @@ func (in *Install) SummaryLines() []string {
 	}
 	if in.Opt.FleetPath != "" {
 		lines = append(lines, "Fleet UI       https://"+in.Opt.Domain+in.Opt.FleetPath+"/  (add a login: sudo tor-relay-setup fleet serve passwd NAME)")
+	}
+	if in.Opt.Local {
+		t := in.Tunnel
+		if t.Host == "" {
+			t = Tunnel{User: TunnelUserPlaceholder, Host: TunnelHostPlaceholder}
+		}
+		for _, row := range t.Rows() {
+			lines = append(lines, fmt.Sprintf("%-15s%s", row[0], row[1]))
+		}
 	}
 	pub := in.PublicKey
 	if pub == "" {

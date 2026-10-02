@@ -17,14 +17,16 @@ var purgeable = []string{"grafana", "prometheus", "caddy"}
 // UninstallSteps stops the stack. Without purge the packages, data and
 // configuration stay, so `monitor install` brings it back as it was; with
 // purge everything this tool created goes, including Prometheus's history
-// and Grafana's database. Firewall rules are left alone either way.
+// and Grafana's database. Firewall rules are left alone either way. In
+// local mode Caddy is not part of the stack and is left alone too.
 func UninstallSteps(st State, purge bool) []plan.Step {
+	units := UnitsFor(st)
 	steps := []plan.Step{{
 		ID: "stop", Title: "Stop the monitoring services", Weight: 2,
-		Changes: []string{"Stop and disable " + FleetUnit + ", grafana-server, prometheus and caddy; remove " + FleetUnitPath},
+		Changes: []string{"Stop and disable " + strings.Join(units[:len(units)-1], ", ") + " and " + units[len(units)-1] + "; remove " + FleetUnitPath},
 		Run: func(ctx context.Context, e *plan.Env, r plan.Reporter) error {
 			h := e.Host
-			for _, u := range Units {
+			for _, u := range units {
 				// A unit that is missing or already stopped is fine.
 				_, _ = h.Run(ctx, host.Command{Name: "systemctl", Args: []string{"disable", "--now", u}, Mutates: true})
 			}

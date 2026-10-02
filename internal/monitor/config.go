@@ -2,9 +2,12 @@
 // fleet: `tor-relay-setup fleet serve` probes every relay over SSH and
 // exposes Prometheus metrics on loopback, Prometheus stores them, Grafana
 // shows the provisioned dashboards, and Caddy publishes Grafana (and the
-// fleet web UI) over HTTPS. Relays expose nothing new: the monitoring
-// server reaches them with a dedicated SSH key that a forced command
-// limits to `sudo -n tor-relay-setup fleet-probe` (see Authorize).
+// fleet web UI) over HTTPS. In local mode (--local, for a stack hosted on
+// a non-exit relay) there is no Caddy and no new open port: everything
+// stays on loopback and operators use an SSH tunnel. Relays expose nothing
+// new: the monitoring server reaches them with a dedicated SSH key that a
+// forced command limits to `sudo -n tor-relay-setup fleet-probe` (see
+// Authorize).
 //
 // Like internal/plan, every change goes through a host.Host and is listed
 // in the steps' Changes, so --dry-run and the tests see exactly what a real
@@ -70,6 +73,14 @@ const (
 	DefaultAdminUser = "tor-admin"
 	DefaultFleetPath = "/fleet"
 
+	// ModePublic publishes Grafana with Caddy over HTTPS (--domain);
+	// ModeLocal keeps every service on loopback (--local), for operators
+	// who reach Grafana through an SSH tunnel.
+	ModePublic = "public"
+	ModeLocal  = "local"
+	// LocalGrafanaURL is Grafana's address through the SSH tunnel.
+	LocalGrafanaURL = "http://localhost:3000/"
+
 	// Retention keeps 400 days, so a full year can be compared with the
 	// previous one (yearly accounting, seasonal traffic), but never more
 	// than RetentionSize on disk: whichever limit is reached first wins.
@@ -112,6 +123,10 @@ func ReleaseFor(f system.Facts) (Release, bool) {
 
 // Options is what `monitor install` was asked for.
 type Options struct {
+	// Local is --local: no Caddy and no new open port; Grafana and the
+	// fleet UI stay on loopback and are reached through an SSH tunnel.
+	// Domain, Email and FleetPath must then be empty.
+	Local     bool
 	Domain    string // the public name Caddy serves Grafana on
 	Email     string // ACME account e-mail, optional
 	Inventory string // fleet.toml the fleet service probes
@@ -142,12 +157,14 @@ func (o *Options) Normalize() error {
 	}
 	var errs []error
 	switch {
+	case o.Local:
+		errs = append(errs, o.localConflicts()...)
 	case o.Domain == "":
-		errs = append(errs, errors.New("--domain is required: the DNS name Grafana is served on, e.g. grafana.example.org"))
+		errs = append(errs, errors.New("--domain is required: the DNS name Grafana is served on, e.g. grafana.example.org (or --local: no public service, Grafana through an SSH tunnel)"))
 	case len(o.Domain) > 253 || !domainRE.MatchString(o.Domain):
 		errs = append(errs, fmt.Errorf("--domain %q is not a DNS name (Let's Encrypt needs a name, not an IP address)", o.Domain))
 	}
-	if o.Email != "" {
+	if o.Email != "" && !o.Local {
 		a, err := mail.ParseAddress(o.Email)
 		if err != nil || a.Address != o.Email || strings.ContainsAny(o.Email, " \t\"'{}\\") {
 			errs = append(errs, fmt.Errorf("--email %q is not a plain e-mail address", o.Email))
@@ -156,7 +173,7 @@ func (o *Options) Normalize() error {
 	if !filepath.IsAbs(o.Inventory) || !unitSafe(o.Inventory) {
 		errs = append(errs, fmt.Errorf("--inventory %q must be an absolute path of letters, digits and ._+-/", o.Inventory))
 	}
-	if o.FleetPath != "" && (!fleetPathRE.MatchString(o.FleetPath) || len(o.FleetPath) > 64) {
+	if o.FleetPath != "" && !o.Local && (!fleetPathRE.MatchString(o.FleetPath) || len(o.FleetPath) > 64) {
 		errs = append(errs, fmt.Errorf("--fleet-path %q must look like /fleet (lower-case letters, digits, - and _), or be \"off\"", o.FleetPath))
 	}
 	if !adminRE.MatchString(o.AdminUser) || o.AdminUser == "admin" {
@@ -168,8 +185,45 @@ func (o *Options) Normalize() error {
 	return errors.Join(errs...)
 }
 
-// URL is the public Grafana address.
-func (o Options) URL() string { return "https://" + o.Domain + "/" }
+// LocalMode decides the mode of an install: --local asks for local mode,
+// --domain for public mode, and without either the previous install's
+// mode is kept, so switching always needs an explicit flag.
+func LocalMode(prev State, localFlag, domainFlag bool) bool {
+	return localFlag || (!domainFlag && prev.Local())
+}
+
+// localConflicts lists the public-mode options set together with Local.
+func (o Options) localConflicts() []error {
+	const switchHint = " (to publish Grafana over HTTPS instead, run monitor install --domain NAME without --local)"
+	var errs []error
+	if o.Domain != "" {
+		errs = append(errs, errors.New("--domain is not used with --local: in local mode Grafana stays on 127.0.0.1:3000 and is reached through an SSH tunnel"+switchHint))
+	}
+	if o.Email != "" {
+		errs = append(errs, errors.New("--email is not used with --local: local mode requests no Let's Encrypt certificate"+switchHint))
+	}
+	if o.FleetPath != "" {
+		errs = append(errs, errors.New("--fleet-path is not used with --local: the fleet web UI stays on 127.0.0.1:9850 and is reached through the SSH tunnel (only --fleet-path off is accepted)"))
+	}
+	return errs
+}
+
+// Mode is ModeLocal or ModePublic.
+func (o Options) Mode() string {
+	if o.Local {
+		return ModeLocal
+	}
+	return ModePublic
+}
+
+// URL is the Grafana address: https://DOMAIN/, or LocalGrafanaURL in
+// local mode.
+func (o Options) URL() string {
+	if o.Local {
+		return LocalGrafanaURL
+	}
+	return "https://" + o.Domain + "/"
+}
 
 // unitSafe accepts paths that need no quoting in a unit or config file.
 func unitSafe(p string) bool {
