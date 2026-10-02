@@ -216,11 +216,12 @@ jobs:
           systemctl show -p Result --value tor-relay-setup-alert.service | grep -Fx success
       - name: fleet authorize lets a monitoring key run the probe and nothing else
         run: |
-          # authorize refuses a binary that a non-root user could replace.
-          sudo install -m 0755 bin/tor-relay-setup /usr/local/bin/tor-relay-setup
+          # authorize refuses a binary that a non-root user could replace, and
+          # the runner image leaves /usr/local/bin world-writable (mode 777).
+          sudo install -D -m 0755 bin/tor-relay-setup /opt/trs/bin/tor-relay-setup
           sudo systemctl start ssh || sudo systemctl start sshd
           ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/monitor"
-          sudo /usr/local/bin/tor-relay-setup fleet authorize --yes --from 127.0.0.1 --key "$(cat "$RUNNER_TEMP/monitor.pub")"
+          sudo /opt/trs/bin/tor-relay-setup fleet authorize --yes --from 127.0.0.1 --key "$(cat "$RUNNER_TEMP/monitor.pub")"
           probe() {
             ssh -i "$RUNNER_TEMP/monitor" -o BatchMode=yes -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
@@ -233,12 +234,12 @@ jobs:
           jq -e '.relays | length == 2' forced.json
           test ! -e /tmp/pwned
           # The probe user cannot run anything else as root.
-          ! sudo -u tor-relay-probe sudo -n /usr/local/bin/tor-relay-setup status 2> /dev/null
+          ! sudo -u tor-relay-probe sudo -n /opt/trs/bin/tor-relay-setup status 2> /dev/null
           ! sudo -u tor-relay-probe sudo -n /bin/sh -c id 2> /dev/null
-          sudo /usr/local/bin/tor-relay-setup fleet authorize --remove --yes
+          sudo /opt/trs/bin/tor-relay-setup fleet authorize --remove --yes
           ! probe 2> /dev/null
       - name: monitor install --dry-run on a management server
-        run: sudo /usr/local/bin/tor-relay-setup monitor install --domain grafana.example.org --dry-run --yes | tail -40
+        run: sudo /opt/trs/bin/tor-relay-setup monitor install --domain grafana.example.org --dry-run --yes | tail -40
       - name: uninstall removes the tool, never Tor
         run: |
           sudo bin/tor-relay-setup uninstall --yes --plain
