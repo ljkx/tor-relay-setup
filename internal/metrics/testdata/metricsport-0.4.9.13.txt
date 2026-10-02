@@ -1,0 +1,75 @@
+# Trimmed from a real tor 0.4.9.13 MetricsPort (throwaway local relay with AccountingMax set).
+# HELP tor_bug_reached_count Total number of BUG() and similar assertion reached
+# TYPE tor_bug_reached_count counter
+tor_bug_reached_count 0
+# HELP tor_relay_connections Total number of opened connections
+# TYPE tor_relay_connections gauge
+tor_relay_connections{type="OR listener",direction="initiated",state="opened",family="ipv4"} 1
+tor_relay_connections{type="OR listener",direction="initiated",state="opened",family="ipv6"} 0
+tor_relay_connections{type="OR listener",direction="received",state="opened",family="ipv4"} 0
+tor_relay_connections{type="OR listener",direction="received",state="opened",family="ipv6"} 0
+tor_relay_connections{type="OR",direction="initiated",state="opened",family="ipv4"} 206
+tor_relay_connections{type="OR",direction="initiated",state="opened",family="ipv6"} 0
+tor_relay_connections{type="OR",direction="received",state="opened",family="ipv4"} 0
+tor_relay_connections{type="OR",direction="received",state="opened",family="ipv6"} 0
+tor_relay_connections{type="Exit",direction="initiated",state="opened",family="ipv4"} 0
+tor_relay_connections{type="Exit",direction="initiated",state="opened",family="ipv6"} 0
+tor_relay_connections{type="Exit",direction="received",state="opened",family="ipv4"} 0
+tor_relay_connections{type="Exit",direction="received",state="opened",family="ipv6"} 0
+# HELP tor_relay_load_socket_total Total number of sockets
+# TYPE tor_relay_load_socket_total gauge
+tor_relay_load_socket_total{state="opened"} 209
+tor_relay_load_socket_total 1048544
+# HELP tor_relay_load_global_rate_limit_reached_total Total number of global connection bucket limit reached
+# TYPE tor_relay_load_global_rate_limit_reached_total counter
+tor_relay_load_global_rate_limit_reached_total{side="read"} 0
+tor_relay_load_global_rate_limit_reached_total{side="write"} 0
+# HELP tor_relay_traffic_bytes Traffic related counters
+# TYPE tor_relay_traffic_bytes counter
+tor_relay_traffic_bytes{direction="read"} 40328276
+tor_relay_traffic_bytes{direction="written"} 2845970
+# HELP tor_relay_load_tcp_exhaustion_total Total number of times we ran out of TCP ports
+# TYPE tor_relay_load_tcp_exhaustion_total counter
+tor_relay_load_tcp_exhaustion_total 0
+# HELP tor_relay_load_oom_bytes_total Total number of bytes the OOM has freed by subsystem
+# TYPE tor_relay_load_oom_bytes_total counter
+tor_relay_load_oom_bytes_total{subsys="cell"} 0
+tor_relay_load_oom_bytes_total{subsys="dns"} 0
+tor_relay_load_oom_bytes_total{subsys="geoip"} 0
+tor_relay_load_oom_bytes_total{subsys="hsdir"} 0
+# HELP tor_relay_flag Relay flags from consensus
+# TYPE tor_relay_flag gauge
+tor_relay_flag{type="Fast"} 0
+tor_relay_flag{type="Exit"} 0
+tor_relay_flag{type="Authority"} 0
+tor_relay_flag{type="Stable"} 0
+tor_relay_flag{type="HSDir"} 0
+tor_relay_flag{type="Running"} 0
+tor_relay_flag{type="V2Dir"} 0
+tor_relay_flag{type="Sybil"} 0
+tor_relay_flag{type="Guard"} 0
+# HELP tor_relay_dos_total Denial of Service defenses related counters
+# TYPE tor_relay_dos_total counter
+tor_relay_dos_total{type="circuit_rejected"} 0
+tor_relay_dos_total{type="circuit_killed_max_cell"} 0
+tor_relay_dos_total{type="circuit_killed_max_cell_outq"} 0
+tor_relay_dos_total{type="marked_address"} 0
+tor_relay_dos_total{type="marked_address_maxq"} 0
+tor_relay_dos_total{type="conn_rejected"} 0
+tor_relay_dos_total{type="concurrent_conn_rejected"} 0
+tor_relay_dos_total{type="single_hop_refused"} 0
+tor_relay_dos_total{type="introduce2_rejected"} 0
+tor_relay_dos_total{type="stream_rejected"} 0
+# HELP tor_relay_circuits_total Total number of circuits
+# TYPE tor_relay_circuits_total gauge
+tor_relay_circuits_total{state="opened"} 213
+# HELP tor_relay_load_onionskins_total Total number of onionskins handled
+# TYPE tor_relay_load_onionskins_total counter
+tor_relay_load_onionskins_total{type="tap",action="processed"} 0
+tor_relay_load_onionskins_total{type="tap",action="dropped"} 0
+tor_relay_load_onionskins_total{type="fast",action="processed"} 0
+tor_relay_load_onionskins_total{type="fast",action="dropped"} 0
+tor_relay_load_onionskins_total{type="ntor",action="processed"} 0
+tor_relay_load_onionskins_total{type="ntor",action="dropped"} 0
+tor_relay_load_onionskins_total{type="ntor_v3",action="processed"} 0
+tor_relay_load_onionskins_total{type="ntor_v3",action="dropped"} 0

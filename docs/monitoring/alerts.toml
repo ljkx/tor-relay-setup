@@ -1,0 +1,64 @@
+# tor-relay-setup alert configuration.
+#
+# Install it with:
+#   sudo install -m 0600 -o root -g root alerts.toml /etc/tor-relay-setup/alerts.toml
+#   sudo tor-relay-setup alert test        # one test message to every notifier
+#   sudo tor-relay-setup alert install     # check every 5 minutes from a systemd timer
+#
+# Keep the file mode 0600: it may hold access tokens and secret webhook URLs.
+# Unknown keys are rejected, so a typo fails loudly instead of silently.
+
+# Label for the relay in messages (default: its nickname, else the host name).
+# name = "relay-fra-1"
+
+# Alerts below this severity are tracked but not sent: info, warning or critical.
+min_severity = "warning"
+
+# Repeat a still-open problem this often ("0s" never repeats).
+remind_every = "24h"
+
+# Warn when this share of AccountingMax (percent) is used in the current period.
+accounting_threshold = 90
+
+# Keep an overload alert open this long after tor last reported the signal.
+overload_hold = "6h"
+
+# Consensus flags whose loss is reported (once, when it happens).
+watch_flags = ["Guard", "Stable", "Fast", "HSDir"]
+
+# Report a newer tor package from apt's package lists (severity info).
+check_updates = false
+
+# Every notifier below receives every message. Configure as many as you like;
+# delete the examples you do not use.
+
+# ntfy (https://ntfy.sh or self-hosted): a push notification per message.
+# Pick a long, unguessable topic name: on ntfy.sh, anyone who knows it can read it.
+[[ntfy]]
+url = "https://ntfy.sh/replace-with-a-long-random-topic"
+# token = "tk_..."            # access token for protected topics
+# tags = ["relay-fra-1"]      # extra tags; severity tags are added automatically
+
+# Generic webhook: POSTs the whole message as JSON
+# ({"relay", "nickname", "fingerprint", "host", "time", "alerts": [...]}).
+# [[webhook]]
+# url = "https://alerts.example.org/hooks/tor"
+# headers = { Authorization = "Bearer replace-me" }
+
+# Slack-compatible incoming webhook ({"text": ...}): Slack, Mattermost,
+# Rocket.Chat, Discord (append /slack to its webhook URL), Matrix hookshot.
+# [[webhook]]
+# url = "https://hooks.slack.com/services/T000/B000/XXXX"
+# format = "slack"
+
+# Email through the local mail transfer agent (sendmail -t), for example
+# postfix or msmtp-mta.
+# [[email]]
+# to = ["ops@example.org"]
+# from = "tor-relay@example.org"
+# sendmail = "/usr/sbin/sendmail"
+
+# Any program: receives the message as JSON on standard input.
+# [[command]]
+# argv = ["/usr/local/bin/relay-alert", "--channel", "ops"]
+# timeout = "30s"

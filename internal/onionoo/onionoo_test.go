@@ -111,6 +111,26 @@ func TestDetailsFamilyIDShapes(t *testing.T) {
 	}
 }
 
+func TestDetailsOverloadGeneral(t *testing.T) {
+	// Onionoo gives milliseconds, aligned to the hour (value seen on the live API).
+	s := newServer(t, http.StatusOK, `{"relays":[{"nickname":"x","overload_general_timestamp":1790924400000}]}`)
+	r, err := s.client().Details(context.Background(), fp1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 2, 7, 0, 0, 0, time.UTC)
+	if !r.OverloadGeneral.Equal(want) {
+		t.Fatalf("OverloadGeneral = %v, want %v", r.OverloadGeneral, want)
+	}
+	if !r.Overloaded(want.Add(71*time.Hour)) || r.Overloaded(want.Add(72*time.Hour)) {
+		t.Error("Relay Search shows overload for 72 hours")
+	}
+	var none *Relay
+	if none.Overloaded(want) || (&Relay{}).Overloaded(want) {
+		t.Error("no timestamp means not overloaded")
+	}
+}
+
 func TestDetailsNotPublished(t *testing.T) {
 	s := newServer(t, http.StatusOK, `{"version":"8.0","relays":[],"bridges":[]}`)
 	r, err := s.client().Details(context.Background(), fp1)

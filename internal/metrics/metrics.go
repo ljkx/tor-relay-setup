@@ -1,6 +1,8 @@
-// Package metrics reads the few counters the console shows from Tor's
-// MetricsPort (Prometheus text format): relay traffic and open OR
-// connections.
+// Package metrics reads Tor's MetricsPort (Prometheus text format): relay
+// traffic and open OR connections for the console, and the load counters
+// behind Tor's overload signals (see overload.go). accounting.go reads
+// AccountingMax usage from Tor's state file, because the MetricsPort has no
+// accounting series.
 package metrics
 
 import (
@@ -19,13 +21,66 @@ const maxBody = 4 << 20 // 4 MiB; a relay's metrics page is about 40 KiB
 
 var defaultHTTP = &http.Client{Timeout: 3 * time.Second}
 
-// Sample is one scrape of the MetricsPort.
+// Sample is one scrape of the MetricsPort. The JSON form is persisted as a
+// baseline between runs (see AssessOverload).
 type Sample struct {
-	At          time.Time
-	Read        uint64 // tor_relay_traffic_bytes{direction="read"}
-	Written     uint64 // tor_relay_traffic_bytes{direction="written"}
-	Connections int    // open OR connections, both directions and families
+	At          time.Time `json:"at"`
+	Read        uint64    `json:"read"`        // tor_relay_traffic_bytes{direction="read"}
+	Written     uint64    `json:"written"`     // tor_relay_traffic_bytes{direction="written"}
+	Connections int       `json:"connections"` // open OR connections, both directions and families
+	Load        Load      `json:"load"`
 }
+
+// Load holds the tor_relay_load_* series (tor 0.4.7 and later). Counters
+// count since tor started; the socket values are gauges.
+type Load struct {
+	Seen bool `json:"seen"` // the page had at least one tor_relay_load_* series
+
+	// tor_relay_load_onionskins_total{type,action="processed"|"dropped"}
+	OnionskinsProcessed Onionskins `json:"onionskins_processed"`
+	OnionskinsDropped   Onionskins `json:"onionskins_dropped"`
+
+	// tor_relay_load_oom_bytes_total{subsys}: bytes the out-of-memory
+	// handler freed after MaxMemInQueues was reached.
+	OOMBytes OOMBytes `json:"oom_bytes"`
+
+	// tor_relay_load_tcp_exhaustion_total: connections that failed because
+	// the local TCP port range ran out.
+	TCPExhaustion uint64 `json:"tcp_exhaustion"`
+
+	// tor_relay_load_global_rate_limit_reached_total{side}: how often the
+	// global BandwidthRate/BandwidthBurst token bucket ran empty.
+	RateLimitRead  uint64 `json:"rate_limit_read"`
+	RateLimitWrite uint64 `json:"rate_limit_write"`
+
+	// tor_relay_load_socket_total{state="opened"} and the unlabelled
+	// tor_relay_load_socket_total, the most sockets tor allows itself.
+	SocketsOpen  uint64 `json:"sockets_open"`
+	SocketsLimit uint64 `json:"sockets_limit"`
+}
+
+// Onionskins counts circuit-creation handshakes by type.
+type Onionskins struct {
+	TAP    uint64 `json:"tap"`
+	Fast   uint64 `json:"fast"`
+	Ntor   uint64 `json:"ntor"`
+	NtorV3 uint64 `json:"ntor_v3"`
+}
+
+// NtorTotal is ntor plus ntor_v3, the handshakes behind tor's onionskin
+// overload signal.
+func (o Onionskins) NtorTotal() uint64 { return o.Ntor + o.NtorV3 }
+
+// OOMBytes is the memory the OOM handler freed, by subsystem.
+type OOMBytes struct {
+	Cell  uint64 `json:"cell"`
+	DNS   uint64 `json:"dns"`
+	GeoIP uint64 `json:"geoip"`
+	HSDir uint64 `json:"hsdir"`
+}
+
+// Total is the sum over all subsystems.
+func (o OOMBytes) Total() uint64 { return o.Cell + o.DNS + o.GeoIP + o.HSDir }
 
 // Rate is the traffic between two samples, in bytes per second.
 type Rate struct {
@@ -93,7 +148,8 @@ func Scrape(ctx context.Context, client *http.Client, metricsPort string) (Sampl
 }
 
 // Parse reads the counters from a Prometheus text exposition. It fails when
-// the page has no traffic counter, which means it is not Tor's.
+// the page has no traffic counter, which means it is not Tor's. Sample.At
+// is left zero; Scrape sets it.
 func Parse(r io.Reader) (Sample, error) {
 	var s Sample
 	found := false
@@ -120,6 +176,11 @@ func Parse(r io.Reader) (Sample, error) {
 			if labels["type"] == "OR" && labels["state"] == "opened" {
 				s.Connections += int(value)
 			}
+		default:
+			if strings.HasPrefix(name, "tor_relay_load_") {
+				s.Load.Seen = true
+				s.Load.add(name, labels, uint64(value))
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -129,6 +190,60 @@ func Parse(r io.Reader) (Sample, error) {
 		return s, fmt.Errorf("MetricsPort: no tor_relay_traffic_bytes counter")
 	}
 	return s, nil
+}
+
+// add records one tor_relay_load_* sample. Unknown names and label values
+// (a future handshake type, say) are ignored.
+func (l *Load) add(name string, labels map[string]string, v uint64) {
+	switch name {
+	case "tor_relay_load_onionskins_total":
+		var o *Onionskins
+		switch labels["action"] {
+		case "processed":
+			o = &l.OnionskinsProcessed
+		case "dropped":
+			o = &l.OnionskinsDropped
+		default:
+			return
+		}
+		switch labels["type"] {
+		case "tap":
+			o.TAP = v
+		case "fast":
+			o.Fast = v
+		case "ntor":
+			o.Ntor = v
+		case "ntor_v3":
+			o.NtorV3 = v
+		}
+	case "tor_relay_load_oom_bytes_total":
+		switch labels["subsys"] {
+		case "cell":
+			l.OOMBytes.Cell = v
+		case "dns":
+			l.OOMBytes.DNS = v
+		case "geoip":
+			l.OOMBytes.GeoIP = v
+		case "hsdir":
+			l.OOMBytes.HSDir = v
+		}
+	case "tor_relay_load_tcp_exhaustion_total":
+		l.TCPExhaustion = v
+	case "tor_relay_load_global_rate_limit_reached_total":
+		switch labels["side"] {
+		case "read":
+			l.RateLimitRead = v
+		case "write":
+			l.RateLimitWrite = v
+		}
+	case "tor_relay_load_socket_total":
+		switch labels["state"] {
+		case "opened":
+			l.SocketsOpen = v
+		case "":
+			l.SocketsLimit = v
+		}
+	}
 }
 
 // splitSample parses `name{k="v",...} value [timestamp]`.
