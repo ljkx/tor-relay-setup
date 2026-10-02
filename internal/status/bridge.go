@@ -174,8 +174,8 @@ func (b Bridge) ScanURL(ip string) string {
 	return relay.ScanURL + "?address=" + ip + "&port=" + strconv.Itoa(b.Port)
 }
 
-// bridgeWarnings returns what needs attention on a bridge.
-func bridgeWarnings(r Report) []string {
+// BridgeWarnings returns what needs attention on a bridge (status and alert).
+func BridgeWarnings(r Report) []string {
 	b := r.Bridge
 	if b == nil {
 		return nil

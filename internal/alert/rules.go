@@ -113,6 +113,21 @@ func Evaluate(in Input, prev Observed, cfg Config) Evaluation {
 			Body: "torrc declares FamilyId " + strings.Join(r.Family.MissingKeys, ", ") + " but no matching secret family key is installed in " + r.Family.KeyDirectory + ". Copy the family's NAME.secret_family_key there (owned by debian-tor, mode 0600) and restart tor."})
 	}
 
+	if w := status.BridgeWarnings(r); len(w) > 0 {
+		add(Alert{ID: "bridge-transport", Severity: Critical, Title: "the bridge's transport needs attention",
+			Body: strings.Join(w, ". ") + "."})
+	}
+	if r.Keys != nil {
+		if w := r.Keys.Warnings(in.Now, 0); len(w) > 0 {
+			sev := Warning
+			if !r.Keys.CertExpires.IsZero() && !r.Keys.CertExpires.After(in.Now) {
+				sev = Critical // tor stops with an expired signing certificate
+			}
+			add(Alert{ID: "signing-key", Severity: sev, Title: "the relay's identity keys need attention",
+				Body: strings.Join(w, ". ") + "."})
+		}
+	}
+
 	evalDirectory(&ev, in, prev, cfg)
 	evalOverload(&ev, in, prev, cfg)
 	evalAccounting(&ev, in, cfg)

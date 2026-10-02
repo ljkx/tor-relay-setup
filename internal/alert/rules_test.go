@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ljkx/tor-relay-setup/internal/keys"
 	"github.com/ljkx/tor-relay-setup/internal/metrics"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/status"
@@ -306,5 +307,42 @@ func TestEvaluateObservations(t *testing.T) {
 	ev = Evaluate(in, prev, DefaultConfig())
 	if m := ev.Observed.Overload["onionskins_dropped"]; m.Severity != Warning || !m.At.Equal(testNow) {
 		t.Errorf("mark %+v", m)
+	}
+}
+
+func TestEvaluateKeysAndBridge(t *testing.T) {
+	find := func(ev Evaluation, id string) (Alert, bool) {
+		for _, a := range ev.Alerts {
+			if a.ID == id {
+				return a, true
+			}
+		}
+		return Alert{}, false
+	}
+
+	in := healthy(t)
+	in.Report.Keys = &keys.State{Offline: true, CertExpires: testNow.Add(3 * 24 * time.Hour)}
+	a, ok := find(Evaluate(in, Observed{}, Config{}), "signing-key")
+	if !ok || a.Severity != Warning || !strings.Contains(a.Body, "expires in 3 days") {
+		t.Errorf("expiring: %+v %v", a, ok)
+	}
+	in.Report.Keys.CertExpires = testNow.Add(-time.Hour)
+	if a, ok := find(Evaluate(in, Observed{}, Config{}), "signing-key"); !ok || a.Severity != Critical {
+		t.Errorf("expired: %+v %v", a, ok)
+	}
+	in.Report.Keys.CertExpires = testNow.Add(20 * 24 * time.Hour)
+	if _, ok := find(Evaluate(in, Observed{}, Config{}), "signing-key"); ok {
+		t.Error("a certificate valid for 20 days needs no alert")
+	}
+
+	in = healthy(t)
+	in.Report.Bridge = &status.Bridge{Transport: "obfs4", Plugin: "/usr/bin/obfs4proxy", PluginInstalled: true, Port: 443}
+	a, ok = find(Evaluate(in, Observed{}, Config{}), "bridge-transport")
+	if !ok || a.Severity != Critical || !strings.Contains(a.Body, "not listening on TCP 443") {
+		t.Errorf("bridge: %+v %v", a, ok)
+	}
+	in.Report.Bridge.Listening = true
+	if _, ok := find(Evaluate(in, Observed{}, Config{}), "bridge-transport"); ok {
+		t.Error("a listening bridge needs no alert")
 	}
 }

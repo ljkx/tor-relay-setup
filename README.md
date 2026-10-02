@@ -158,7 +158,7 @@ tor-relay-setup status --format prometheus   # tor_relay_setup_* gauges for node
 sudo tor-relay-setup alert install           # check every 5 minutes and notify on changes
 ```
 
-`alert` notifies through ntfy, webhooks (including Slack-compatible ones), email via `sendmail`, or any command. It reports when the service stops, the ORPort becomes unreachable, a family key goes missing, the relay drops out of the consensus or loses a flag, Tor's overload signals fire, or the accounting budget will run out early. It notifies when a problem appears, reminds you daily while it lasts, and tells you when it is resolved. Configure it in `/etc/tor-relay-setup/alerts.toml` ([example](docs/monitoring/alerts.toml)), and try it with `alert test`.
+`alert` notifies through ntfy, webhooks (including Slack-compatible ones), email via `sendmail`, or any command. It reports when the service stops, the ORPort becomes unreachable, a family key goes missing, the relay drops out of the consensus or loses a flag, Tor's overload signals fire, the accounting budget will run out early, a signing certificate is about to expire, or a bridge transport stops. It notifies when a problem appears, reminds you daily while it lasts, and tells you when it is resolved. Configure it in `/etc/tor-relay-setup/alerts.toml` ([example](docs/monitoring/alerts.toml)), and try it with `alert test`.
 
 [`docs/monitoring/`](docs/monitoring/README.md) has the textfile-collector timer, safe ways to scrape Tor's MetricsPort, Prometheus alerting rules, and a [Grafana dashboard](docs/monitoring/grafana-dashboard.json).
 

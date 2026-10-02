@@ -348,7 +348,7 @@ func warnings(r Report) []string {
 	if r.Relay.Configured && r.Service.Active && r.Relay.ORPort > 0 && !r.Listener.IPv4 && !r.Listener.IPv6 {
 		w = append(w, "nothing is listening on the ORPort")
 	}
-	w = append(w, bridgeWarnings(r)...)
+	w = append(w, BridgeWarnings(r)...)
 	if r.Reachability.Failed && !r.Reachability.IPv4 {
 		w = append(w, "Tor could not confirm the ORPort is reachable from outside")
 	}
