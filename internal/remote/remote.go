@@ -298,6 +298,9 @@ func (s *stopper) get() error {
 // Apply runs the fleet and prints a summary. It returns an error when any
 // relay failed or was skipped.
 func (f *Fleet) Apply(ctx context.Context, opt Options) ([]HostResult, error) {
+	if opt.Inventory != nil && opt.Inventory.MonitorOnly {
+		return nil, fleet.ErrMonitorOnly
+	}
 	r, err := f.prepare(opt)
 	if err != nil {
 		return nil, err
