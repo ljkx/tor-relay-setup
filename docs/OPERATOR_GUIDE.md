@@ -59,7 +59,7 @@ Run more than one relay? They must be declared as one family, so clients never u
 
 **Rotating the key:** create the new key on one relay and keep the existing FamilyId lines when asked. Import the new key everywhere, wait a few days, then **Remove a FamilyId (`x`)** for the old one.
 
-**CIISS proof:** if your ContactInfo has a `url:`, publish the family ID at `https://<your-domain>/.well-known/tor-relay/ed25519-family-id.txt` so tools can verify that the relays are yours.
+**CIISS proof:** if your ContactInfo has a `url:`, publish the family ID at `https://<your-domain>/.well-known/tor-relay/ed25519-family-id.txt` so tools can verify that the relays are yours. `tor-relay-setup proof --all` (or **console → ContactInfo proof (`c`)**) prints the exact file for every relay on the server. `proof --check` fetches the published copy and confirms it lists them. The file must be served over HTTPS, must not redirect to another domain, and must never contain the secret key; the check fails loudly if it does.
 
 **MyFamily:** fingerprint lists are the pre-0.4.9 method, and Tor 0.4.8 is end-of-life, so current clients only use `FamilyId`. Once FamilyId is in place, **Relay family → Remove legacy MyFamily (`m`)** cleans up the old list.
 
@@ -193,11 +193,49 @@ The dashboard and `fleet status` run `tor-relay-setup fleet-probe` on every host
 Exits carry the legal and abuse load of the network, so preparation matters more than configuration:
 
 - Get the provider's permission in writing, and know how complaints reach you. The wizard will not continue without that confirmation.
-- Set reverse DNS to something like `tor-exit.example.org`, and consider a short web page on that name explaining that the server is a Tor exit.
+- Set reverse DNS to something like `tor-exit.example.org`.
+- Turn on the **exit notice** (wizard, or **console → Exit policy (`x`)**). tor itself then serves [`tor-exit-notice.html`](examples/tor-exit-notice.html) on port 80 (`DirPort 80` with `DirPortFrontPage`), so anyone who looks up the IP address learns it is a Tor exit. Edit the page's placeholders; the tool never overwrites an existing page.
 - Keep the **local Unbound resolver** the tool installs. Don't forward DNS to large public resolvers. For busy exits, watch `tor_relay_exit_dns_error_total` via MetricsPort.
-- Start with `ReducedExitPolicy`. Tor docs describe it as a good default.
+- Start with `ReducedExitPolicy` (`exit.policy = "reduced"`), Tor's built-in list of common ports. The other choices:
+  - `web`: 80 and 443 only;
+  - `default`: Tor's default policy, which draws more complaints;
+  - `custom`: your own rules in `exit.custom_policy`.
 
-Read [Tor's exit guidelines](https://community.torproject.org/relay/community-resources/tor-exit-guidelines/) before you publish an exit.
+  The console editor validates each rule (`accept`/`reject`/`accept6`/`reject6`, addresses or `*`/`*4`/`*6`/`private`, ports and ranges). It insists on a final `reject *:*` or `accept *:*`, and has tor verify the result before writing it.
+- Answer complaints promptly. [`docs/examples/`](examples) has reply templates for copyright (DMCA) notices, other abuse reports, and law-enforcement requests. Fill in the placeholders and adapt them to your jurisdiction.
+
+Read [Tor's exit guidelines](https://community.torproject.org/relay/community-resources/tor-exit-guidelines/) and the [EFF's legal FAQ](https://community.torproject.org/relay/community-resources/eff-tor-legal-faq/) before you publish an exit.
+
+## Bridges
+
+Bridges are relays that are not listed in the public consensus, for users whose networks block Tor. Choose **Bridge** as the relay type.
+
+| | obfs4 | WebTunnel |
+| --- | --- | --- |
+| Looks like | random bytes | an ordinary HTTPS website |
+| You need | a second open TCP port | a domain pointing at the server, TLS, nginx (or your own web server) |
+| Packages | `obfs4proxy`, or `lyrebird` where Debian ships it | `webtunnel` from the Tor Project repository, plus `nginx` |
+| Example | [`bridge-obfs4.toml`](examples/bridge-obfs4.toml) | [`bridge-webtunnel.toml`](examples/bridge-webtunnel.toml) |
+
+- **Ports below 1024:** an obfs4 port below 1024 (443 is popular) needs extra privileges. The tool grants the transport `cap_net_bind_service` with `setcap`, adds a `NoNewPrivileges=no` drop-in for the tor unit, and adds a managed block to the AppArmor profile. The console warns if the capability is missing.
+- **WebTunnel:** the tool writes the nginx site `tor-webtunnel-<instance>`, which proxies a secret random path to the bridge on `127.0.0.1`. It checks the site with `nginx -t` and restores the previous version if the check fails. Certificates come from files you already have, or from certbot after you confirm its terms (`certificate = "certbot"`, `certbot_agree_tos = true`). With `web_server = "manual"`, the review shows the location block for your own server.
+- **Distribution:** `bridge.distribution` chooses how Tor hands out the bridge: `any`, `https`, `email`, `telegram`, `settings`, or `none` to share it only yourself. WebTunnel bridges are handed out by `https`.
+- **Sharing:** **console → Bridge line (`i`)** shows the line to give to users, with the public address filled in. `y` copies it; `w` saves it to a root-only file. Test obfs4 reachability with [bridges.torproject.org/scan](https://bridges.torproject.org/scan/).
+- **Privacy:** the bridge line is left out of `status --json`, so it never reaches monitoring systems or fleet probes. Tor Metrics only ever sees the bridge's hashed fingerprint.
+- **Restrictions:** bridges never use a relay family, and run without Sandbox, because tor refuses Sandbox with pluggable transports.
+
+## Identity keys
+
+A relay's identity is its ed25519 master key plus an RSA key. By default both stay on the server, and tor renews its medium-term signing key by itself. For more protection, keep the master key offline:
+
+1. **Back up first:** run **console → Back up keys (`b`)**, then copy the archive off the server.
+2. **`sudo tor-relay-setup keys offline`** sets `OfflineMasterKey 1` (checked by tor, then reloaded). It exports the master key, its public key, and the RSA identity key to `/root/tor-master-key-<instance>-<time>/`, reading each copy back to verify it. Copy that directory somewhere safe and offline.
+3. **`sudo tor-relay-setup keys offline --remove-master`** deletes the master key from the server. It only does so after you type the first 12 hex digits of the copy's SHA-256, while `OfflineMasterKey 1` is set and the current signing certificate is valid for at least another day.
+4. **Before the signing key expires** (30 days by default; `status`, `alert` and the console warn a week ahead), make the next one:
+   - **On the machine with the master key:** run `tor --keygen` with the master key's data directory, copy `ed25519_signing_secret_key` and `ed25519_signing_cert` to the relay, then run `sudo tor-relay-setup keys renew --from DIR`. That checks the certificate is signed by this relay's master key and not expired, installs both files for the tor user with mode `600`, and reloads tor. `keys renew` without flags prints these commands.
+   - **Or briefly on the relay:** run `sudo tor-relay-setup keys renew --master DIR` with the master key copied over, then remove the copy.
+
+`keys status` (console `k`) shows where each key lives and when the signing certificate expires.
 
 ## Backups
 

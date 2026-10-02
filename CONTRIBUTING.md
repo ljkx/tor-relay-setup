@@ -29,7 +29,9 @@ internal/service        systemctl and journalctl, reachability wait, family warn
 internal/onionoo        Tor Metrics client: details, search, bandwidth history
 internal/metrics        MetricsPort scraper, overload assessment, accounting from tor's state file
 internal/alert          alert rules, transition state, and notifiers (ntfy, webhook, sendmail, command)
-internal/status         the health report behind the console and status (text, JSON, Prometheus)
+internal/status         the health report behind the console and status (text, JSON, Prometheus), bridge lines
+internal/proof          CIISS ContactInfo proof files and their HTTPS check
+internal/keys           ed25519 signing certificates, offline master key export and renewal
 internal/update         self-update and the cached "newer release" check
 internal/remote         ssh/scp fleet runs: parallel apply with family key hand-off, fleet probes, rolling actions
 internal/fleet          fleet.toml inventory, fleet-probe document, aggregation and checks, fleet status output
