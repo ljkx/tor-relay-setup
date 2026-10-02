@@ -20,7 +20,7 @@ func (r Report) WritePrometheus(w io.Writer) error { return WritePrometheusAll(w
 // WritePrometheusAll writes reports, one per tor instance, in the Prometheus
 // text exposition format for node_exporter's textfile collector: one gauge
 // family per metric, with # HELP and # TYPE lines, in a fixed order. Every
-// sample carries an instance label ("default" or the instance name), and
+// sample carries a tor_instance label ("default" or the instance name), and
 // each family lists the instances in the order given.
 //
 // The Tor Metrics gauges (directory_*, consensus_weight,
@@ -34,7 +34,7 @@ func WritePrometheusAll(w io.Writer, reports []Report) error {
 	gauge := func(name, help string, samples func(r Report) []sample) {
 		var lines []string
 		for _, r := range reports {
-			inst := [2]string{"instance", instanceLabel(r)}
+			inst := [2]string{"tor_instance", instanceLabel(r)}
 			for _, s := range samples(r) {
 				labels := renderLabels(append([][2]string{inst}, s.labels...))
 				lines = append(lines, metricPrefix+name+labels+" "+strconv.FormatInt(s.value, 10))

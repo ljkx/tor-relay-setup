@@ -117,9 +117,9 @@ func TestStatusAllPrometheusAndText(t *testing.T) {
 		t.Errorf("exit %d", code)
 	}
 	for _, want := range []string{
-		"# TYPE tor_relay_setup_up gauge\ntor_relay_setup_up{instance=\"default\"} 1\ntor_relay_setup_up{instance=\"relay2\"} 1\n",
-		`tor_relay_setup_info{instance="relay2",version="0.4.9.3",nickname="SecondRelay",fingerprint=""} 1`,
-		`tor_relay_setup_listener{instance="relay2",family="ipv4"} 1`,
+		"# TYPE tor_relay_setup_up gauge\ntor_relay_setup_up{tor_instance=\"default\"} 1\ntor_relay_setup_up{tor_instance=\"relay2\"} 1\n",
+		`tor_relay_setup_info{tor_instance="relay2",version="0.4.9.3",nickname="SecondRelay",fingerprint=""} 1`,
+		`tor_relay_setup_listener{tor_instance="relay2",family="ipv4"} 1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %q:\n%s", want, out)
