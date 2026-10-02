@@ -473,3 +473,21 @@ func TestInstalled(t *testing.T) {
 		})
 	}
 }
+
+func TestNoRecommends(t *testing.T) {
+	f := host.NewFake()
+	c := Client{Host: f, NoRecommends: true}
+	if err := c.Install(context.Background(), []string{"prometheus"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	lines := f.CommandLines()
+	if !strings.Contains(lines[0], "--no-install-recommends install prometheus") {
+		t.Errorf("install = %s", lines[0])
+	}
+	if strings.Contains(lines[1], "--no-install-recommends") {
+		t.Errorf("update = %s", lines[1])
+	}
+}

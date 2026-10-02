@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN := bin/tor-relay-setup
-SHELL_SCRIPTS := install.sh docs/demo/demo-env.sh scripts/install-dev-tools.sh scripts/build-apt-repo.sh
+SHELL_SCRIPTS := install.sh docs/demo/demo-env.sh scripts/install-dev-tools.sh scripts/build-apt-repo.sh docs/monitoring/dev/run-local-stack.sh
 export PATH := $(CURDIR)/.tools/bin:$(PATH)
 
 .PHONY: help check build test cover lint vuln integration demo snapshot tools clean

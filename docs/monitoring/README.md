@@ -1,18 +1,152 @@
-# Monitoring a relay
+# Monitoring relays
 
-There are three supported ways to watch relays set up with tor-relay-setup. Use one or several:
+There are four supported ways to watch relays set up with tor-relay-setup. Use one or several:
 
 | | What you get | What you need |
 | --- | --- | --- |
+| [Fleet dashboard](#fleet-dashboard-on-a-management-server) (recommended for several relays) | One Grafana for all relays behind HTTPS: health, traffic, consensus weight, flags, geography, overload, accounting, keys, alerts | A small Debian or Ubuntu server and `tor-relay-setup monitor install` |
 | [a. Textfile collector](#a-node_exporter-textfile-collector) | Health, Tor Metrics, overload and accounting gauges from `tor-relay-setup status --format prometheus` | node_exporter on the relay, a Prometheus |
 | [b. Tor's MetricsPort](#b-scraping-tors-metricsport-safely) | Tor's own counters: traffic, connections, circuits, overload, DoS defences | a Prometheus that can reach the MetricsPort privately |
 | [c. Alerts](#c-alerts-with-tor-relay-setup-alert) | Push, chat or mail messages when something breaks, without any monitoring stack | `tor-relay-setup alert` and a systemd timer |
 
 Files in this directory:
 
+- [`fleet-metrics.md`](fleet-metrics.md): the metrics `tor-relay-setup fleet serve` exports (the contract the fleet dashboards and rules are built on)
+- [`grafana/`](grafana): the fleet dashboards, *Tor fleet — overview* and *Tor fleet — relay detail* (generated; see [Development](#development))
+- [`prometheus-fleet-rules.yml`](prometheus-fleet-rules.yml): Prometheus alerting rules for the fleet metrics
 - [`prometheus-rules.yml`](prometheus-rules.yml): Prometheus alerting rules for paths a and b
-- [`grafana-dashboard.json`](grafana-dashboard.json): Grafana dashboard (import it and pick your Prometheus data source)
+- [`grafana-dashboard.json`](grafana-dashboard.json): single-relay Grafana dashboard for paths a and b (import it and pick your Prometheus data source)
 - [`alerts.toml`](alerts.toml): example configuration for `tor-relay-setup alert`
+- [`dev/`](dev): the local test stack, a synthetic fleet exporter and the panel checker
+
+## Fleet dashboard on a management server
+
+```text
+                 HTTPS 443 (Let's Encrypt)
+  operator ───────────────► Caddy ──► Grafana 127.0.0.1:3000 ──► Prometheus 127.0.0.1:9090
+  browser                     │                                     │ scrape every 30 s,
+                              └─► /fleet/ ─► fleet serve ◄──────────┘ bearer token
+                                             127.0.0.1:9850
+                                                  │ ssh as tor-relay-probe, every 30 s
+                                                  ▼ (forced command, read-only)
+            relay 1 … relay N:  sudo -n tor-relay-setup fleet-probe
+```
+
+Everything runs on one management server, which should not be a relay itself. Relays expose nothing new: no exporter, no open port, no MetricsPort over the network. `tor-relay-setup fleet serve` logs in to every relay over SSH with its own key and runs one read-only command there, `tor-relay-setup fleet-probe`. It combines the answers with Tor Metrics data and publishes the [fleet metrics](fleet-metrics.md) on loopback. Prometheus keeps the history, and Grafana shows it. Caddy is the only service reachable from the internet. It terminates HTTPS with an automatic Let's Encrypt certificate and serves Grafana at `/` and the fleet web UI at `/fleet/`.
+
+<!-- Screenshot placeholder: docs/monitoring/screenshots/fleet-overview.png (Tor fleet — overview, top) -->
+<!-- Screenshot placeholder: docs/monitoring/screenshots/fleet-overview-details.png (expanded detail rows) -->
+<!-- Screenshot placeholder: docs/monitoring/screenshots/fleet-relay.png (Tor fleet — relay detail) -->
+
+### Install
+
+Supported management servers: Debian 12 (bookworm) and 13 (trixie), Ubuntu 22.04 (jammy), 24.04 (noble) and 26.04 (resolute), amd64 or arm64, with 1 GiB of RAM and a few GB of disk. You also need a DNS name (an A and/or AAAA record) that points at the server.
+
+1. Install tor-relay-setup on the management server (`install.sh`, into `/usr/local/bin`). Copy your fleet inventory there as `/etc/tor-relay-setup/fleet.toml`, together with the `relay.toml` it names. Make both readable for the `tor-relay-monitor` user. Write the inventory addresses without `user@` (see step 4).
+2. Review, then install:
+
+   ```bash
+   sudo tor-relay-setup monitor install --domain grafana.example.org --email ops@example.org --dry-run
+   sudo tor-relay-setup monitor install --domain grafana.example.org --email ops@example.org
+   ```
+
+   The review lists every change, and `--dry-run` shows every command and file. `--yes` skips the question. Running it again is safe: it changes only what differs, keeps the password, token and your `serve.toml` users, and restarts only services whose configuration changed. At the end it prints the Grafana URL, the administrator login, where the password is, and the password itself (only when it was just generated).
+3. On **every relay**, authorize the monitoring key that `monitor install` printed. Use the management server's public address for `--from`:
+
+   ```bash
+   sudo tor-relay-setup fleet authorize --key 'ssh-ed25519 AAAA… tor-relay-monitor@mgmt' --from 203.0.113.5
+   ```
+
+   It prints the relay's SSH host key as a `known_hosts` line.
+4. On the management server, add each relay's host key line to `/var/lib/tor-relay-monitor/.ssh/known_hosts`. Use the name or address exactly as the inventory writes it. Host keys are never accepted blindly (`StrictHostKeyChecking yes`). Then check one relay end to end:
+
+   ```bash
+   sudo -u tor-relay-monitor ssh relay1.example.org | head -c 300   # prints the probe's JSON
+   sudo systemctl start tor-relay-setup-fleet                        # if it waited for the inventory
+   sudo tor-relay-setup monitor status
+   ```
+
+5. Open `https://grafana.example.org/` and sign in as `tor-admin`. The *Tor fleet — overview* dashboard is the home page. Add logins for the fleet web UI with `sudo tor-relay-setup fleet serve passwd NAME`.
+
+`sudo tor-relay-setup monitor status` shows the four services, whether Prometheus scrapes fleet serve, the fleet totals, and the key and command for new relays. It exits 1 when something is wrong. `sudo tor-relay-setup monitor uninstall` stops and disables the stack and keeps all data. `--purge` also removes the packages it installed, Grafana's database, the metrics history, the monitoring user and key, `serve.toml`, the password file and the apt sources it added. Firewall rules stay either way.
+
+| Flag | Meaning |
+| --- | --- |
+| `--domain NAME` | DNS name of Grafana; Caddy gets the certificate for it |
+| `--email ADDR` | ACME account address for certificate expiry notices (optional) |
+| `--inventory FILE` | inventory fleet serve probes (default `/etc/tor-relay-setup/fleet.toml`) |
+| `--fleet-path PATH` | publish the fleet web UI at `https://NAME/PATH/` (default `/fleet`); `off` keeps it on loopback |
+| `--admin-user NAME` | Grafana administrator login (default `tor-admin`; `admin` is refused) |
+| `--rotate-token` | new metrics token for fleet serve and Prometheus |
+
+### What monitor install sets up
+
+| Component | Source | Configuration |
+| --- | --- | --- |
+| Prometheus | the distribution (bookworm 2.42, trixie 2.53, jammy 2.31, noble 2.45, resolute 2.53) | `/etc/default/prometheus`: loopback only, 400 days or 20 GB of history. It is written **before** the package is installed, so Prometheus never listens publicly, not even on its first start. `/etc/prometheus/prometheus.yml` scrapes fleet serve every 30 s with `authorization: credentials_file: /etc/prometheus/tor-relay-fleet.token` (0640 root:prometheus) and loads `/etc/prometheus/rules/tor-relay-fleet.yml`. promtool checks both before they replace the old files. Installed with `--no-install-recommends`, so no node_exporter appears on port 9100. |
+| Grafana OSS | `https://apt.grafana.com stable main`, deb822 source `/etc/apt/sources.list.d/grafana.sources` with `Signed-By: /usr/share/keyrings/grafana-archive-keyring.gpg` | `/etc/grafana/grafana.ini` (below), data source `tor-prometheus`, folder *Tor relays*, both dashboards (read-only, from `/etc/grafana/dashboards/tor-relay-setup`) |
+| Caddy | the distribution; on Ubuntu 22.04, which has no caddy package, Caddy's repository (`https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main`, `Signed-By: /usr/share/keyrings/caddy-stable-archive-keyring.gpg`) | `/etc/caddy/Caddyfile`: automatic HTTPS, HSTS, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, no `Server` header, HTTP/1.1 and HTTP/2 only (no UDP), `/fleet/metrics*` answered with 404. `caddy validate` checks it first. |
+| fleet serve | this tool | `/etc/tor-relay-setup/serve.toml` (0600 tor-relay-monitor) and `tor-relay-setup-fleet.service`, running as `tor-relay-monitor` |
+| Firewall | ufw (installed when no firewall manager exists), firewalld or nftables, as for relays | allow the existing SSH ports, TCP 80 and TCP 443; nothing else |
+
+The apt signing keys are pinned by fingerprint and verified in Go before they are installed, the same way as the Tor Project key. The download must contain exactly one key with that fingerprint, and only that key is written to the keyring:
+
+- Grafana: `B53AE77BADB630A683046005963FA27710458545` ("Grafana Labs <engineering@grafana.com>", rsa3072, created 2023-08-24, **expires 2027-08-22**). It is the key at `https://apt.grafana.com/gpg.key`, and it signs `dists/stable/InRelease`. `gpg-full.key` also holds the revoked 2017 key and the expired 2023-01 key, so it is not used. When Grafana Labs extends the expiry, run `monitor install` again to refresh the keyring.
+- Caddy (Ubuntu 22.04 only): `65760C51EDEA2017CEA2CA15155B6D79CA56EA34` ("Caddy Web Server <contact@caddyserver.com>"). It signs with the subkey `2F5C3BE9886ACD2913299EFBABA1F9B8875A6661`.
+
+`monitor install` refuses to continue when another apt source already points at the same repository, because apt rejects one repository with two different `Signed-By` keys. Remove the old `grafana.list` or `caddy-stable.list` first.
+
+**grafana.ini** listens on 127.0.0.1:3000 with `root_url = https://DOMAIN/` and `enforce_domain`. Anonymous access, sign-up, org creation, HTTP basic auth on the API, snapshots, public dashboards, the plugin catalog and plugin auto-install, Gravatar, usage reporting, update checks, feedback links and the news feed are off. Cookies are `Secure` and `SameSite=Strict`. HSTS, the content security policy and `X-Content-Type-Options` are on, embedding is off, and the data source proxy may reach only the local Prometheus. The login hints are neutral. Grafana's `secret_key` is generated once and kept across runs. The administrator is renamed (`tor-admin`), and its 32-character password is generated once and stored in `/etc/tor-relay-setup/grafana-admin` (0600 root). `grafana cli … reset-admin-password --password-from-stdin` sets it as the `grafana` user, before Grafana's first start, so the server never runs with `admin`/`admin` and the password never appears on a command line.
+
+**Alerting.** Prometheus evaluates [`prometheus-fleet-rules.yml`](prometheus-fleet-rules.yml): fleet serve down, stale probes or Tor Metrics data, unreachable hosts, hosts without fleet-probe, stopped relays, closed or unreachable ORPorts, relays not running in or dropped out of the consensus, lost Guard/Stable/Fast/HSDir flags, halved consensus weight, status warnings, tor and tool version drift, bridge transports down, Relay Search overload, dropped ntor handshakes, OOM, TCP port exhaustion, sockets near the limit, AccountingMax running out, signing certificates expiring within 7 days or 1 day, missing family keys, and relays outside the fleet's family. Grafana lists them under *Alerting → Alert rules*, and the overview's *Firing alerts* table shows what fires now. No Alertmanager and no Grafana contact point are installed. Sending notifications needs your own secrets (an ntfy topic, SMTP or a chat webhook), and the relays already notify on their own with `tor-relay-setup alert` without depending on the management server. To get fleet-level notifications too, add `prometheus-alertmanager` and point Prometheus at it, or create a Grafana contact point and alert rules on these series in the UI.
+
+**Retention.** Prometheus keeps 400 days, so this year can be compared with the last one (yearly accounting, seasonal traffic, consensus weight trends), but never more than 20 GB. A fleet of 20 relays produces a few thousand series and needs well under 5 GB for 400 days at a 30 s interval, so the size limit only matters for large fleets or small disks.
+
+### The fleet serve service
+
+`tor-relay-setup-fleet.service` runs `tor-relay-setup fleet serve --config /etc/tor-relay-setup/serve.toml` as the system user `tor-relay-monitor`, whose home `/var/lib/tor-relay-monitor` holds the SSH key `.ssh/id_ed25519`, `.ssh/config` and `.ssh/known_hosts`. The SSH config logs in as `tor-relay-probe` with only that key, in batch mode, with strict host key checking and every forwarding disabled. Each line of the unit is commented. The service has no capabilities and cannot gain any (`NoNewPrivileges`, empty `CapabilityBoundingSet`). It sees the file system read-only except its cache directory (`ProtectSystem=strict`, `CacheDirectory=`). It gets private `/tmp` and devices, cannot see `/home` or other processes, cannot change kernel settings, clock or host name, and may use only unix, IPv4 and IPv6 sockets and the `@system-service` system calls. It keeps network access, because relays can be anywhere. `systemd-analyze security` rates it 1.5 ("OK").
+
+monitor install keeps these `serve.toml` keys in sync: `listen = "127.0.0.1:9850"`, `base_path`, `inventory`, `metrics_auth = true`, `metrics_token_sha256` and `trusted_proxies = ["127.0.0.1", "::1"]`. Your `[[users]]`, `privacy`, `probe_interval` (30 s at first) and everything else are left as you set them.
+
+### Relay side: the forced-command key
+
+The SSH key is the security boundary between the monitoring server and the relays. `tor-relay-setup fleet authorize` sets it up so that whoever holds the key can run exactly one read-only command, and nothing else:
+
+- A dedicated system user, `tor-relay-probe`. It has no password (`*`, so password logins are impossible; unlike `!`, `*` does not lock the account, which sshd would refuse even for keys when `UsePAM no`). Its shell is `/bin/sh`, because sshd runs forced commands through the user's shell. Its home `/var/lib/tor-relay-probe`, `~/.ssh` and `authorized_keys` belong to **root**, so the user cannot change them.
+- `authorized_keys`: `restrict,command="sudo -n /usr/local/bin/tor-relay-setup fleet-probe",from="MONITOR_IP" ssh-ed25519 …`. `restrict` turns off port, agent and X11 forwarding, PTYs and `~/.ssh/rc`. `command=` replaces whatever the client asks to run, so `ssh relay 'rm -rf /'` still runs only the probe. `from=` (repeatable `--from`, IP addresses or CIDR ranges, never host names) limits where the key works. Only `ssh-ed25519` keys are accepted, and comments are sanitized.
+- `/etc/sudoers.d/tor-relay-setup-probe` (0440, checked with `visudo -c` before it is installed): `tor-relay-probe ALL=(root) NOPASSWD: /usr/local/bin/tor-relay-setup fleet-probe`. A sudoers command with arguments matches only exactly those arguments, so no other subcommand or flag is allowed. `env_reset` drops the caller's environment, and `!requiretty` lets it run without a terminal.
+- Before writing anything, authorize checks that the tor-relay-setup binary and every directory above it belong to root and are writable only by root. Otherwise anyone who could replace the binary could run anything as root through this rule. It also warns when sshd's `AllowUsers`/`AllowGroups`, `PubkeyAuthentication` or `AuthorizedKeysFile` would keep the key out.
+- `fleet-probe` only reads: torrc, systemd state, the journal, key and family-key presence, tor's state file and the local MetricsPort. It prints one JSON document. Bridge lines and private keys are never part of it.
+
+If the management server is compromised, the attacker can learn what the probe reports, but cannot change a relay. `sudo tor-relay-setup fleet authorize --remove` takes the access away again (sudoers rule, home and user). The manual equivalent of authorize is the `authorized_keys` line above plus the sudoers line, with the user created as described.
+
+### Security notes
+
+- **Exposed:** TCP 443 and 80 (80 only redirects to HTTPS and answers ACME challenges), plus your SSH port. Grafana, Prometheus and fleet serve listen on 127.0.0.1 only. The firewall allows nothing else, and Prometheus listens on loopback from its very first start.
+- **Authentication:** Grafana needs its login form; there is no anonymous access, sign-up or basic auth. The fleet web UI has its own users (argon2id hashes in `serve.toml`, set with `fleet serve passwd`). `/metrics` needs the bearer token, and Caddy does not even forward `/fleet/metrics`.
+- **Admin password:** keep a copy of `/etc/tor-relay-setup/grafana-admin` in your password manager. To replace it, delete the file and run `monitor install` again: it generates, sets and prints a new one. A password you change in Grafana's UI stays until you do that.
+- **Metrics token rotation:** `sudo tor-relay-setup monitor install --domain NAME --rotate-token` writes a new token to Prometheus's credentials file and its SHA-256 to `serve.toml`, and restarts both. (`tor-relay-setup fleet serve token` changes only `serve.toml`; Prometheus would then need the new token in `/etc/prometheus/tor-relay-fleet.token` by hand.)
+- **Privacy:** Tor's manual warns that the MetricsPort's statistics must not be exposed publicly, and fine-grained per-relay traffic and connection counts are exactly that kind of data. Keep the dashboards private: public dashboards and snapshots are disabled on purpose, so don't share panel links outside your team. Tor Metrics publishes relay bandwidth only aggregated and delayed, and the dashboards should not publish more than that. With `privacy = true` in `serve.toml`, fleet serve leaves per-relay traffic and OR connection series out of `/metrics` (fleet totals stay), and the per-relay traffic panels show "No data yet, or hidden by privacy mode". The geomap's base map tiles are loaded by your browser from CARTO (`*.cartocdn.com`, allowed by Grafana's content security policy). Remove that panel if your browser should make no third-party requests.
+- **Updates:** Grafana and Caddy (jammy) come from their apt repositories, and Prometheus and Caddy from the distribution, so `unattended-upgrades` or `apt upgrade` updates them. The dashboards and rules are updated by running a newer `monitor install`.
+
+### Development
+
+The dashboards are generated from Go (`internal/dashgen`), so roughly 100 panels share one colour scheme (Tor purple `#7D4698`), units, thresholds and descriptions. Edit the generator, then run `go generate ./docs/monitoring`. `go test ./docs/monitoring` checks that the JSON matches the generator, that every panel has a description and a unique id and title, that only built-in panel types are used, and that every query uses only metric names from [`fleet-metrics.md`](fleet-metrics.md) (or Prometheus's `up`, `scrape_duration_seconds` and `ALERTS`). It also checks that every contract metric appears on a dashboard, and that every rule uses contract metrics and has a severity and summary. `promtool test rules docs/monitoring/dev/fleet-rules.test.yml` unit-tests some rules.
+
+`dev/run-local-stack.sh` runs Prometheus and Grafana (official release tarballs, checksums pinned) on 127.0.0.1:9090 and :3000 with exactly the files `monitor install` writes (`dev/render`). Only paths, the URL, the HTTPS-only cookie and HSTS settings, and basic auth for the checker are overridden. It scrapes fleet serve on 127.0.0.1:9850:
+
+```bash
+docs/monitoring/dev/run-local-stack.sh fetch
+make build && SERVE_BIN=bin/tor-relay-setup FLEET_ADDR=127.0.0.1:9850 docs/monitoring/dev/run-local-stack.sh start   # runs fleet serve --demo itself
+# or, with a fleet serve --demo already listening on 9850 with its documented token:
+printf trs_demo_metrics_token_not_secret > /tmp/demo-token && TOKEN_FILE=/tmp/demo-token docs/monitoring/dev/run-local-stack.sh start
+# or the synthetic fleet with two days of history:
+FAKE=1 BACKFILL_DAYS=2 docs/monitoring/dev/run-local-stack.sh start
+docs/monitoring/dev/run-local-stack.sh check   # every panel query through Grafana's /api/ds/query
+docs/monitoring/dev/run-local-stack.sh stop
+```
+
+Then open `http://127.0.0.1:3000/` and sign in as `tor-admin` with the password in `.local-stack/grafana-admin`. The daily bars ("Traffic per day") stay empty until the first full day (UTC) of data.
 
 ## a. node_exporter textfile collector
 
