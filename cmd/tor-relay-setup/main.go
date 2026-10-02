@@ -144,6 +144,9 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if sub, ok := alertArgs(args); ok {
+		return alertCmd(sub, stdout, stderr) // alert.go
+	}
 	fs := flag.NewFlagSet("tor-relay-setup", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }

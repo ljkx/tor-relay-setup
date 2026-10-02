@@ -60,6 +60,21 @@ type Relay struct {
 	FamilyIDs         []string // Onionoo "family_ids" (Tor 0.4.9 FamilyId), when published
 
 	ExitProbability, GuardProbability, MiddleProbability float64
+
+	// OverloadGeneral is Onionoo's "overload_general_timestamp": the hour
+	// of the last overload-general event in the relay's descriptor. Relay
+	// Search shows the relay as overloaded while it is under 72 hours old.
+	OverloadGeneral time.Time `json:"OverloadGeneral,omitzero"`
+}
+
+// OverloadWindow is how long tor keeps publishing overload-general after
+// the last event (dir-spec).
+const OverloadWindow = 72 * time.Hour
+
+// Overloaded reports whether Relay Search shows the relay as overloaded at
+// now.
+func (r *Relay) Overloaded(now time.Time) bool {
+	return r != nil && !r.OverloadGeneral.IsZero() && now.Sub(r.OverloadGeneral) < OverloadWindow
 }
 
 // Summary is one relay of an Onionoo summary document.
@@ -147,6 +162,7 @@ type detailsRelay struct {
 	ExitProbability     float64         `json:"exit_probability"`
 	GuardProbability    float64         `json:"guard_probability"`
 	MiddleProbability   float64         `json:"middle_probability"`
+	OverloadGeneralMS   int64           `json:"overload_general_timestamp"` // milliseconds since the epoch
 }
 
 // familyIDs accepts family_ids as a list of strings or a single string and
@@ -187,7 +203,12 @@ func (c Client) Details(ctx context.Context, fingerprint string) (*Relay, error)
 }
 
 func (d detailsRelay) relay() *Relay {
+	var overload time.Time
+	if d.OverloadGeneralMS > 0 {
+		overload = time.UnixMilli(d.OverloadGeneralMS).UTC()
+	}
 	return &Relay{
+		OverloadGeneral:         overload,
 		Nickname:                d.Nickname,
 		Fingerprint:             d.Fingerprint,
 		Running:                 d.Running,

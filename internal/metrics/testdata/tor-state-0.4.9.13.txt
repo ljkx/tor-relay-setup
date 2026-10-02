@@ -1,0 +1,10 @@
+# Trimmed from a real tor 0.4.9.13 state file (same relay; AccountingMax 10 GBytes, AccountingStart month 1 00:00, AccountingRule sum).
+# Tor state file last generated on 2026-10-02 13:25:50 local time
+# Other times below are in UTC
+AccountingBytesReadInInterval 40329216
+AccountingBytesWrittenInInterval 2846720
+AccountingIntervalStart 2026-09-29 22:00:00
+AccountingSecondsActive 73
+Dormant 0
+LastWritten 2026-10-02 11:25:50
+TorVersion Tor 0.4.9.13

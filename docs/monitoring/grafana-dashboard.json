@@ -1,0 +1,373 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus with the tor-relay-setup textfile metrics (and optionally tor's MetricsPort)",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.4.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+    { "type": "panel", "id": "table", "name": "Table", "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "description": "Tor relays set up with tor-relay-setup: health, consensus, traffic, overload and accounting. Textfile metrics from `tor-relay-setup status --format prometheus`; traffic, connections and overload counters need tor's MetricsPort scraped as well.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "Monitoring guide",
+      "type": "link",
+      "url": "https://github.com/ljkx/tor-relay-setup/blob/main/docs/monitoring/README.md",
+      "targetBlank": true,
+      "icon": "doc"
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Health",
+      "id": 100,
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "tor service",
+      "description": "1 when the tor systemd unit is active (tor_relay_setup_service_active).",
+      "id": 1,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_service_active{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}", "instant": true }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Running in consensus",
+      "description": "1 when Tor Metrics reports the relay as running (tor_relay_setup_directory_running). Missing until Tor Metrics lists the relay.",
+      "id": 2,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NOT RUNNING", "color": "red" }, "1": { "text": "RUNNING", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_directory_running{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}", "instant": true }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "ORPort reachable",
+      "description": "1 when tor's self-test confirmed the ORPort is reachable from outside in the last 24 hours, per address family (tor_relay_setup_reachable).",
+      "id": 3,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "NO", "color": "orange" }, "1": { "text": "YES", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "orange", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_reachable{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}} {{family}}", "instant": true }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Warnings",
+      "description": "Problems that need attention, as listed by `tor-relay-setup status` (tor_relay_setup_warnings).",
+      "id": 4,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_warnings{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}", "instant": true }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Family keys missing",
+      "description": "Configured FamilyIds without an installed secret family key (tor_relay_setup_family_keys_missing).",
+      "id": 5,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_family_keys_missing{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}", "instant": true }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Overloaded (Relay Search)",
+      "description": "1 when Tor Metrics lists an overload-general event in the last 72 hours (tor_relay_setup_directory_overloaded).",
+      "id": 6,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK", "color": "green" }, "1": { "text": "OVERLOADED", "color": "orange" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_directory_overloaded{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}", "instant": true }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Consensus and traffic",
+      "id": 101,
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Consensus weight",
+      "description": "Consensus weight reported by Tor Metrics (tor_relay_setup_consensus_weight).",
+      "id": 7,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_consensus_weight{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Advertised bandwidth",
+      "description": "Advertised bandwidth reported by Tor Metrics (tor_relay_setup_advertised_bandwidth_bytes).",
+      "id": 8,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_advertised_bandwidth_bytes{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Traffic (MetricsPort)",
+      "description": "Bytes per second read and written on relay connections, from tor's MetricsPort (rate of tor_relay_traffic_bytes). Needs the MetricsPort scrape job.",
+      "id": 9,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 20 } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*written.*" }, "properties": [ { "id": "custom.transform", "value": "negative-Y" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(tor_relay_traffic_bytes{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}[5m])", "legendFormat": "{{instance}} {{tor_instance}} {{direction}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Open OR connections (MetricsPort)",
+      "description": "Open connections to other relays and clients, by direction (tor_relay_connections{type=\"OR\",state=\"opened\"}).",
+      "id": 10,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "stacking": { "mode": "normal", "group": "A" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (instance, tor_instance, direction) (tor_relay_connections{instance=~\"$instance\",tor_instance=~\"$tor_instance\",type=\"OR\",state=\"opened\"})", "legendFormat": "{{instance}} {{tor_instance}} {{direction}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Overload and accounting",
+      "id": 102,
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Overload signals (MetricsPort)",
+      "description": "Events behind tor's overload-general line per hour: dropped ntor onionskins (CPU), bytes freed by the OOM handler (MaxMemInQueues), and TCP port exhaustion. See https://support.torproject.org/relays/performance/overloaded/",
+      "id": 11,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (instance, tor_instance) (increase(tor_relay_load_onionskins_total{instance=~\"$instance\",tor_instance=~\"$tor_instance\",type=~\"ntor|ntor_v3\",action=\"dropped\"}[1h]))", "legendFormat": "{{instance}} {{tor_instance}} onionskins dropped" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (instance, tor_instance) (increase(tor_relay_load_oom_bytes_total{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}[1h]))", "legendFormat": "{{instance}} {{tor_instance}} OOM bytes freed" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "increase(tor_relay_load_tcp_exhaustion_total{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}[1h])", "legendFormat": "{{instance}} {{tor_instance}} TCP port exhaustion" },
+        { "refId": "D", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (instance, tor_instance) (increase(tor_relay_load_global_rate_limit_reached_total{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}[1h]))", "legendFormat": "{{instance}} {{tor_instance}} rate limit reached" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Overload signals (textfile)",
+      "description": "1 while an overload signal fired between two tor-relay-setup runs (tor_relay_setup_overload_signal); works without scraping the MetricsPort.",
+      "id": 12,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1, "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 30 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_overload_signal{instance=~\"$instance\",tor_instance=~\"$tor_instance\"} == 1", "legendFormat": "{{instance}} {{tor_instance}} {{signal}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Sockets in use and AccountingMax used",
+      "description": "Open sockets as a share of tor's limit (tor_relay_load_socket_total, MetricsPort; overload-fd-exhausted at 100%), and the share of AccountingMax used this period (textfile).",
+      "id": 13,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "min": 0, "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 0.9 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_load_socket_total{instance=~\"$instance\",tor_instance=~\"$tor_instance\",state=\"opened\"} / ignoring (state) tor_relay_load_socket_total{instance=~\"$instance\",tor_instance=~\"$tor_instance\",state=\"\"}", "legendFormat": "{{instance}} {{tor_instance}} sockets" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_accounting_used_bytes{instance=~\"$instance\",tor_instance=~\"$tor_instance\"} / tor_relay_setup_accounting_max_bytes{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "legendFormat": "{{instance}} {{tor_instance}} accounting" }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Relays",
+      "description": "Identity and tor version of every relay (tor_relay_setup_info).",
+      "id": 14,
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "fields": "" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "tor_relay_setup_info{instance=~\"$instance\",tor_instance=~\"$tor_instance\"}", "format": "table", "instant": true }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "Value": true, "__name__": true, "job": true },
+            "indexByName": { "instance": 0, "tor_instance": 1, "nickname": 2, "fingerprint": 3, "version": 4 },
+            "renameByName": { "version": "tor version" }
+          }
+        }
+      ]
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["tor", "relay", "tor-relay-setup"],
+  "templating": {
+    "list": [
+      {
+        "name": "nickname",
+        "label": "Nickname",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(tor_relay_setup_info, nickname)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "definition": "label_values(tor_relay_setup_info, nickname)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {},
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(tor_relay_setup_info{nickname=~\"$nickname\"}, instance)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "definition": "label_values(tor_relay_setup_info{nickname=~\"$nickname\"}, instance)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {},
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      },
+      {
+        "name": "tor_instance",
+        "label": "Tor instance",
+        "description": "tor instance on the host (tor_instance label): default, or the Debian instance name",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(tor_relay_setup_info{nickname=~\"$nickname\",instance=~\"$instance\"}, tor_instance)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "definition": "label_values(tor_relay_setup_info{nickname=~\"$nickname\",instance=~\"$instance\"}, tor_instance)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {},
+        "options": [],
+        "sort": 1,
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Tor relays (tor-relay-setup)",
+  "uid": "tor-relay-setup",
+  "version": 1,
+  "weekStart": ""
+}
