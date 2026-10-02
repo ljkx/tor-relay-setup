@@ -58,6 +58,12 @@ Usage:
                                             needs attention
   tor-relay-setup fleet restart|reload|update-tor [--only HOST[,HOST]] [--yes] [--keep-going]
                                             one relay at a time, waiting until each is back
+  tor-relay-setup fleet authorize --key 'ssh-ed25519 …' [--from IP]
+                                            on a relay: let a monitoring server probe it with a
+                                            forced-command key (see monitor --help)
+  tor-relay-setup monitor install|status|uninstall
+                                            Prometheus + Grafana dashboards for the whole fleet behind
+                                            Caddy HTTPS, on a management server (see monitor --help)
   tor-relay-setup tor restart|reload|update [--yes]
                                             restart and verify, reload, or upgrade tor on this relay
   tor-relay-setup console                   open the operator console
@@ -168,6 +174,12 @@ func main() {
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if sub, ok := alertArgs(args); ok {
 		return alertCmd(sub, stdout, stderr) // alert.go
+	}
+	if sub, ok := monitorArgs(args); ok {
+		return monitorCmd(sub, stdin, stdout, stderr) // monitor.go
+	}
+	if sub, ok := fleetAuthorizeArgs(args); ok {
+		return fleetAuthorizeCmd(sub, stdin, stdout, stderr) // monitor.go
 	}
 	fs := flag.NewFlagSet("tor-relay-setup", flag.ContinueOnError)
 	fs.SetOutput(stderr)
