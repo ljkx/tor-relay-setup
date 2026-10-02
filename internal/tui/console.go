@@ -96,6 +96,10 @@ type console struct {
 	rate    metrics.Rate
 	rates   []float64 // total bytes/s, oldest first
 	liveErr error
+	// Overload signals since the console started watching this relay: the
+	// first sample is the baseline for tor's load counters.
+	base     metrics.Sample
+	overload metrics.Overload
 
 	// Several relays on this server: inst is the selected one (the zero
 	// value means the default instance); instances and overview list every
@@ -299,7 +303,42 @@ func (c *console) record(s metrics.Sample, err error) {
 			c.rates = c.rates[len(c.rates)-liveWindow:]
 		}
 	}
+	if c.base.At.IsZero() || s.Read < c.base.Read {
+		c.base = s // first sample, or tor restarted
+	}
+	c.overload = metrics.AssessOverload(c.base, s)
 	c.last = s
+}
+
+// overloadRows report tor's overload signals: those seen while the console
+// watched (from the MetricsPort) and Relay Search's mark (from Tor Metrics,
+// kept for 72 hours after tor last published overload-general).
+func (c *console) overloadRows(a *App, width int) [][2]string {
+	t := a.theme
+	var rows [][2]string
+	for _, f := range c.overload.Findings {
+		rows = append(rows, [2]string{"Overload", statusIcon(t, false, !f.Published) + " " + truncate(f.Summary, width)})
+	}
+	if c.dir != nil && c.dir.Overloaded(time.Now()) {
+		rows = append(rows, [2]string{"Relay Search", statusIcon(t, false, true) + " marked overloaded since " + c.dir.OverloadGeneral.Local().Format("Jan 2 15:04")})
+	}
+	if len(rows) == 0 && c.overload.Supported {
+		rows = append(rows, [2]string{"Overload", statusIcon(t, true, false) + " " + t.Subtle.Render("no signals")})
+	}
+	return rows
+}
+
+// overloadWarnings explain each overload signal with Tor's remedy, for the
+// "Needs attention" panel.
+func (c *console) overloadWarnings() []string {
+	var out []string
+	for _, f := range c.overload.Findings {
+		out = append(out, f.Summary+". "+f.Remedy)
+	}
+	if c.dir != nil && c.dir.Overloaded(time.Now()) && len(c.overload.Findings) == 0 {
+		out = append(out, "Relay Search marks this relay overloaded: tor published overload-general in the last 72 hours. Run tor-relay-setup alert run --dry-run to see which signal.")
+	}
+	return out
 }
 
 // loadReport shows a fresh report of the selected instance.
@@ -354,6 +393,7 @@ func (c *console) switchTo(a *App, i int) tea.Cmd {
 	}
 	c.dir, c.dirErr, c.dirLoading, c.dirAt, c.history, c.bridgeDir = nil, nil, false, time.Time{}, nil, nil
 	c.last, c.rate, c.rates, c.liveErr = metrics.Sample{}, metrics.Rate{}, nil, nil
+	c.base, c.overload = metrics.Sample{}, metrics.Overload{}
 	return tea.Batch(c.lookup(a), c.scrape(), c.refresh(a))
 }
 
@@ -617,6 +657,7 @@ func (c *console) cards(a *App, width int) string {
 		{"MetricsPort", metrics},
 	}
 	trafficRows = append(trafficRows, c.liveRows(a, cwRight-18)...)
+	trafficRows = append(trafficRows, c.overloadRows(a, cwRight-22)...)
 	trafficRows = append(trafficRows, [2]string{"Sandbox", yesNo(r.Relay.Sandbox)})
 	traffic := panel(t, "Traffic", kv(t, trafficRows), cwRight, false)
 
@@ -681,9 +722,9 @@ func (c *console) cards(a *App, width int) string {
 		}
 		rows = append(rows, panel(t, "Recent log  (l opens the live view)", lb.String(), width, false))
 	}
-	if len(r.Warnings) > 0 {
+	if warnings := slices.Concat(r.Warnings, c.overloadWarnings()); len(warnings) > 0 {
 		var wb strings.Builder
-		for i, w := range r.Warnings {
+		for i, w := range warnings {
 			if i > 0 {
 				wb.WriteString("\n")
 			}
