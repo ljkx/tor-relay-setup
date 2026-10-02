@@ -11,12 +11,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ljkx/tor-relay-setup/internal/alert"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
+	"github.com/ljkx/tor-relay-setup/internal/relay"
 )
 
 const alertUsage = `tor-relay-setup alert — tell the operator when the relay needs attention
@@ -191,14 +193,40 @@ func alertRun(ctx context.Context, h host.Host, dir onionoo.Client, cfgPath stri
 	if err != nil {
 		return err
 	}
+	insts, _ := relay.Discover(h)
+	if len(insts) == 0 {
+		insts = []relay.Instance{relay.DefaultInstance()}
+	}
 	r := alert.Runner{
 		Host: h, Config: cfg, Notifiers: cfg.Notifiers(h, nil),
 		StatePath: alert.DefaultStatePath, Out: stdout, DryRun: dryRun,
 	}
 	if test {
-		return r.Test(ctx, alert.Identify(h, ""))
+		return r.Test(ctx, alert.Identify(h, insts[0].TorrcPath))
 	}
-	return r.Run(ctx, alert.Gather(ctx, h, alert.GatherOptions{Onionoo: dir, CheckUpdates: cfg.CheckUpdates}))
+	// Every relay on the server is checked, each with its own state, and
+	// messages name the relay when there is more than one.
+	var errs []error
+	for _, inst := range insts {
+		r.StatePath = alertStatePath(inst)
+		if len(insts) > 1 {
+			r.Instance = inst.Name
+		}
+		in := alert.Gather(ctx, h, alert.GatherOptions{Instance: inst, Onionoo: dir, CheckUpdates: cfg.CheckUpdates})
+		if err := r.Run(ctx, in); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", inst.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// alertStatePath keeps the default relay's state where it always was and
+// gives every named instance a file of its own.
+func alertStatePath(inst relay.Instance) string {
+	if inst.Name == "" || inst.Name == relay.DefaultInstanceName {
+		return alert.DefaultStatePath
+	}
+	return strings.TrimSuffix(alert.DefaultStatePath, ".json") + "-" + inst.Name + ".json"
 }
 
 // loadAlertConfig reads and validates the configuration through h and

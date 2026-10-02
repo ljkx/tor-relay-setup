@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/ljkx/tor-relay-setup/internal/alert"
+	"github.com/ljkx/tor-relay-setup/internal/relay"
 )
 
 func TestAlertArgs(t *testing.T) {
@@ -244,5 +247,15 @@ func TestAlertNeedsRoot(t *testing.T) {
 		if code != 1 || !strings.Contains(errOut, "must run as root") {
 			t.Errorf("%s: exit %d, stderr %q", sub, code, errOut)
 		}
+	}
+}
+
+func TestAlertStatePathPerInstance(t *testing.T) {
+	if got := alertStatePath(relay.DefaultInstance()); got != alert.DefaultStatePath {
+		t.Errorf("default = %q", got)
+	}
+	inst, _ := relay.Named("relay2")
+	if got := alertStatePath(inst); got != "/var/lib/tor-relay-setup/alert-state-relay2.json" {
+		t.Errorf("relay2 = %q", got)
 	}
 }

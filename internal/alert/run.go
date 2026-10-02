@@ -20,8 +20,9 @@ import (
 
 // GatherOptions configures Gather.
 type GatherOptions struct {
-	TorrcPath    string           // default /etc/tor/torrc
-	Unit         string           // tor systemd unit; default tor@default
+	Instance     relay.Instance   // the tor instance; zero is the default one
+	TorrcPath    string           // default: the instance's torrc
+	Unit         string           // tor systemd unit; default: the instance's unit
 	Onionoo      onionoo.Client   // Tor Metrics
 	HTTP         *http.Client     // MetricsPort scrape; nil uses metrics' default
 	CheckUpdates bool             // ask apt-cache policy about the tor package
@@ -33,14 +34,15 @@ type GatherOptions struct {
 // view of the tor package. Every probe is read-only; failures are recorded
 // in the Input instead of stopping the run.
 func Gather(ctx context.Context, h host.Host, opt GatherOptions) Input {
+	inst := opt.Instance.OrDefault()
 	if opt.TorrcPath == "" {
-		opt.TorrcPath = "/etc/tor/torrc"
+		opt.TorrcPath = inst.TorrcPath
 	}
 	now := time.Now
 	if opt.Now != nil {
 		now = opt.Now
 	}
-	in := Input{Report: status.Collect(ctx, h, status.Options{TorrcPath: opt.TorrcPath, Unit: opt.Unit})}
+	in := Input{Report: status.Collect(ctx, h, status.Options{Instance: inst, TorrcPath: opt.TorrcPath, Unit: opt.Unit})}
 	r := &in.Report
 	if r.Relay.Fingerprint != "" {
 		dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
