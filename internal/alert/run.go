@@ -66,7 +66,7 @@ func Gather(ctx context.Context, h host.Host, opt GatherOptions) Input {
 		}
 	}
 	if doc != nil {
-		in.Accounting, in.AccountingErr = accounting(h, doc, now())
+		in.Accounting, in.AccountingErr = AccountingFor(h, doc, now())
 	}
 	if opt.CheckUpdates {
 		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -103,9 +103,9 @@ func Identify(h host.Host, torrcPath string) Input {
 	return in
 }
 
-// accounting assesses AccountingMax from torrc and tor's state file. It
+// AccountingFor assesses AccountingMax from torrc and tor's state file. It
 // returns nil (and no error) when accounting is not configured.
-func accounting(h host.Host, doc *relay.Document, now time.Time) (*metrics.Accounting, string) {
+func AccountingFor(h host.Host, doc *relay.Document, now time.Time) (*metrics.Accounting, string) {
 	maxValue, ok := doc.Get("AccountingMax")
 	if !ok {
 		return nil, ""

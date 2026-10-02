@@ -25,6 +25,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/fleet"
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/metrics"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/remote"
@@ -457,6 +458,29 @@ func statusInstances(h host.Host, req statusRequest) []relay.Instance {
 
 // collectReports gathers one report per instance concurrently, each with
 // its Tor Metrics lookup.
+// loadMetrics adds tor's load counters (one MetricsPort scrape per running
+// relay), the accounting budget and Relay Search's overload mark to the
+// Prometheus output. Overload gauges that need two samples are left to
+// Prometheus (increase() over the *_total series) and to alert.
+func loadMetrics(ctx context.Context, h host.Host, insts []relay.Instance, reports []status.Report) []status.LoadMetrics {
+	out := make([]status.LoadMetrics, len(reports))
+	for i, r := range reports {
+		m := status.LoadMetrics{Instance: r.Instance, MetricsPort: r.Relay.MetricsPort != "", Directory: r.Directory}
+		if m.MetricsPort && r.Service.Active {
+			if s, err := metrics.Scrape(ctx, nil, r.Relay.MetricsPort); err == nil {
+				m.Sample = &s
+			}
+		}
+		if i < len(insts) {
+			if data, err := h.ReadFile(insts[i].OrDefault().TorrcPath); err == nil {
+				m.Accounting, _ = alert.AccountingFor(h, relay.ParseDocument(data), time.Now())
+			}
+		}
+		out[i] = m
+	}
+	return out
+}
+
 func collectReports(ctx context.Context, h host.Host, dir onionoo.Client, instances []relay.Instance) []status.Report {
 	reports := make([]status.Report, len(instances))
 	var wg sync.WaitGroup
@@ -509,10 +533,14 @@ func statusFormat(format string, asJSON bool) (string, error) {
 func statusCmd(h host.Host, dir onionoo.Client, req statusRequest, stdout io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	reports := collectReports(ctx, h, dir, statusInstances(h, req))
+	insts := statusInstances(h, req)
+	reports := collectReports(ctx, h, dir, insts)
 	switch req.Format {
 	case "prometheus":
 		if err := status.WritePrometheusAll(stdout, reports); err != nil {
+			return 1
+		}
+		if err := status.WriteLoadPrometheusAll(stdout, loadMetrics(ctx, h, insts, reports)); err != nil {
 			return 1
 		}
 		return 0
