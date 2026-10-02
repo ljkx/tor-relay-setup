@@ -33,6 +33,33 @@ func TestExitPolicySettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestActsAsExit(t *testing.T) {
+	for torrc, want := range map[string]bool{
+		"ORPort 9001\n":                                                   false,
+		"ORPort 9001\nExitRelay 0\n":                                      false,
+		"ORPort 9001\nExitRelay 0\nExitPolicy accept *:80\n":              false,
+		"ORPort 9001\nExitPolicy reject *:*\n":                            false,
+		"ORPort 9001\nExitPolicy reject *:25, reject *:*\n":               false,
+		"ORPort 9001\nExitRelay 1\n":                                      true,
+		"ORPort 9001\nExitRelay 1 # yes\nExitPolicy reject *:*\n":         true,
+		"ORPort 9001\nExitRelay auto\nExitPolicy accept *:443\n":          true,
+		"ORPort 9001\nExitPolicy reject *:25\nExitPolicy accept *:*\n":    true,
+		"ORPort 9001\nReducedExitPolicy 1\n":                              true,
+		"ORPort 9001\n# ExitRelay 1\n#ExitPolicy accept *:*\n":            false,
+		"ORPort 9001\nexitrelay 1\n":                                      true,
+		"ORPort 9001\nExitPolicy ACCEPT6 [2001:db8::]/32:*, reject *:*\n": true,
+	} {
+		if got := ParseDocument([]byte(torrc)).ActsAsExit(); got != want {
+			t.Errorf("ActsAsExit(%q) = %v, want %v", torrc, got, want)
+		}
+	}
+	for _, p := range []ExitPolicy{PolicyReduced, PolicyDefault, PolicyWeb} {
+		if !exitDoc(p, nil).ActsAsExit() {
+			t.Errorf("rendered %s exit not detected", p)
+		}
+	}
+}
+
 func TestSetExitPolicyInPlace(t *testing.T) {
 	doc := exitDoc(PolicyReduced, nil)
 	doc.SetExitPolicy(PolicyCustom, []string{"accept *:443", "reject *:*"}, false)

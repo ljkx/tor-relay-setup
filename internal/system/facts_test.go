@@ -242,6 +242,7 @@ func TestDetect(t *testing.T) {
 		OSID: "ubuntu", VersionID: "24.04", Codename: "noble", PrettyName: "Ubuntu 24.04.1 LTS",
 		Arch: "arm64", Hostname: "relay1", MemTotalMiB: 2000, DiskFreeMiB: 20480, Systemd: true,
 		IPv6:     []string{"2001:db8::5", "2a01:4f8::10"},
+		IPv4:     []string{"203.0.113.5"},
 		SSHPorts: []int{22, 2222},
 		Firewall: Firewall{Kind: KindUFW, Active: true, Detail: DetailActive},
 		EUID:     got.EUID,
@@ -371,6 +372,32 @@ func TestIsGlobalIPv6(t *testing.T) {
 	}
 	if IsGlobalIPv6(nil) {
 		t.Error("nil IP is not global")
+	}
+}
+
+func TestIsPublicIPv4(t *testing.T) {
+	for in, want := range map[string]bool{
+		"203.0.113.5":        true,
+		"::ffff:203.0.113.5": true,
+		"8.8.8.8":            true,
+		"10.0.0.1":           false,
+		"172.16.5.1":         false,
+		"192.168.1.1":        false,
+		"100.64.0.1":         false,
+		"100.127.255.254":    false,
+		"100.128.0.1":        true,
+		"127.0.0.1":          false,
+		"169.254.1.1":        false,
+		"0.0.0.0":            false,
+		"224.0.0.1":          false,
+		"2001:db8::1":        false,
+	} {
+		if got := IsPublicIPv4(net.ParseIP(in)); got != want {
+			t.Errorf("IsPublicIPv4(%s) = %v, want %v", in, got, want)
+		}
+	}
+	if IsPublicIPv4(nil) {
+		t.Error("nil IP is not public")
 	}
 }
 

@@ -4,7 +4,7 @@ There are four supported ways to watch relays set up with tor-relay-setup. Use o
 
 | | What you get | What you need |
 | --- | --- | --- |
-| [Fleet dashboard](#fleet-dashboard-on-a-management-server) (recommended for several relays) | One Grafana for all relays behind HTTPS: health, traffic, consensus weight, flags, geography, overload, accounting, keys, alerts | A small Debian or Ubuntu server and `tor-relay-setup monitor install` |
+| [Fleet dashboard](#fleet-dashboard-on-a-management-server) (recommended for several relays) | One Grafana for all relays behind HTTPS (or, in [local mode](#local-mode-on-a-relay-through-an-ssh-tunnel), on a non-exit relay through an SSH tunnel): health, traffic, consensus weight, flags, geography, overload, accounting, keys, alerts | A small Debian or Ubuntu server (or one of your non-exit relays) and `tor-relay-setup monitor install` |
 | [a. Textfile collector](#a-node_exporter-textfile-collector) | Health, Tor Metrics, overload and accounting gauges from `tor-relay-setup status --format prometheus` | node_exporter on the relay, a Prometheus |
 | [b. Tor's MetricsPort](#b-scraping-tors-metricsport-safely) | Tor's own counters: traffic, connections, circuits, overload, DoS defences | a Prometheus that can reach the MetricsPort privately |
 | [c. Alerts](#c-alerts-with-tor-relay-setup-alert) | Push, chat or mail messages when something breaks, without any monitoring stack | `tor-relay-setup alert` and a systemd timer |
@@ -32,7 +32,7 @@ Files in this directory:
             relay 1 … relay N:  sudo -n tor-relay-setup fleet-probe
 ```
 
-Everything runs on one management server, which should not be a relay itself. Relays expose nothing new: no exporter, no open port, no MetricsPort over the network. `tor-relay-setup fleet serve` logs in to every relay over SSH with its own key and runs one read-only command there, `tor-relay-setup fleet-probe`. It combines the answers with Tor Metrics data and publishes the [fleet metrics](fleet-metrics.md) on loopback. Prometheus keeps the history, and Grafana shows it. Caddy is the only service reachable from the internet. It terminates HTTPS with an automatic Let's Encrypt certificate and serves Grafana at `/` and the fleet web UI at `/fleet/`.
+Everything runs on one management server, which should not be a relay itself (if you don't want a separate server or any new public service, see [local mode](#local-mode-on-a-relay-through-an-ssh-tunnel)). Relays expose nothing new: no exporter, no open port, no MetricsPort over the network. `tor-relay-setup fleet serve` logs in to every relay over SSH with its own key and runs one read-only command there, `tor-relay-setup fleet-probe`. It combines the answers with Tor Metrics data and publishes the [fleet metrics](fleet-metrics.md) on loopback. Prometheus keeps the history, and Grafana shows it. Caddy is the only service reachable from the internet. It terminates HTTPS with an automatic Let's Encrypt certificate and serves Grafana at `/` and the fleet web UI at `/fleet/`.
 
 <!-- Screenshot placeholder: docs/monitoring/screenshots/fleet-overview.png (Tor fleet — overview, top) -->
 <!-- Screenshot placeholder: docs/monitoring/screenshots/fleet-overview-details.png (expanded detail rows) -->
@@ -73,11 +73,52 @@ Supported management servers: Debian 12 (bookworm) and 13 (trixie), Ubuntu 22.04
 | Flag | Meaning |
 | --- | --- |
 | `--domain NAME` | DNS name of Grafana; Caddy gets the certificate for it |
+| `--local` | [local mode](#local-mode-on-a-relay-through-an-ssh-tunnel): no Caddy, no open port, Grafana through an SSH tunnel; not combined with `--domain`, `--email` or `--fleet-path` |
 | `--email ADDR` | ACME account address for certificate expiry notices (optional) |
 | `--inventory FILE` | inventory fleet serve probes (default `/etc/tor-relay-setup/fleet.toml`) |
 | `--fleet-path PATH` | publish the fleet web UI at `https://NAME/PATH/` (default `/fleet`); `off` keeps it on loopback |
 | `--admin-user NAME` | Grafana administrator login (default `tor-admin`; `admin` is refused) |
 | `--rotate-token` | new metrics token for fleet serve and Prometheus |
+
+### Local mode (on a relay, through an SSH tunnel)
+
+```text
+  operator laptop                                   relay (non-exit)
+  browser ─► localhost:3000 ══ SSH tunnel (port 22) ══► Grafana 127.0.0.1:3000 ─► Prometheus 127.0.0.1:9090
+                                                        fleet serve 127.0.0.1:9850 ─ssh─► other relays
+```
+
+`monitor install --local` sets up the same stack without any public service. Use it when you don't want to rent a separate management server and don't want to open anything new: Grafana, Prometheus and fleet serve listen on 127.0.0.1 only, Caddy is not installed (no Caddy repository on Ubuntu 22.04 either), and the firewall is not touched, so no port is opened and none is added to an existing firewall. You reach Grafana through an SSH tunnel, using the SSH access you already have.
+
+```bash
+sudo tor-relay-setup monitor install --local --dry-run
+sudo tor-relay-setup monitor install --local
+```
+
+Then, on your own computer, open the tunnel and leave it running:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 USER@RELAY            # add -p PORT for another SSH port
+ssh -N -L 3000:127.0.0.1:3000 -L 9850:127.0.0.1:9850 USER@RELAY   # with the fleet web UI too
+```
+
+and open `http://localhost:3000` (and `http://localhost:9850/` for the fleet UI). `monitor install` and `monitor status` print this command with your login (`SUDO_USER`) and the relay's public address filled in when they can tell (the address you are connected to, the torrc `Address`, or a public interface address), otherwise with placeholders. In **Termius**, open the host, then *Port Forwarding → New → Local*: local port `3000`, destination host `127.0.0.1`, destination port `3000`. Start the rule, then open `http://localhost:3000` in your browser. On Windows, `ssh` (OpenSSH) works the same in PowerShell; in PuTTY, use *Connection → SSH → Tunnels*, source port `3000`, destination `127.0.0.1:3000`.
+
+What differs from public mode:
+
+| | Local mode |
+| --- | --- |
+| Caddy, Let's Encrypt | not installed; `--domain`, `--email` and `--fleet-path` (other than `off`) are refused with `--local` |
+| Firewall | unchanged: no TCP 80/443, and no firewall is installed or enabled (on a running relay, a firewall that allows only SSH would cut off the ORPort) |
+| grafana.ini | `domain = localhost`, `enforce_domain = false` (through the tunnel the browser sends `Host: localhost:3000`), `root_url = http://localhost:3000/`, `cookie_secure = false` and `strict_transport_security = false` (the browser talks plain HTTP to its end of the tunnel; SSH encrypts the rest). Everything else is hardened exactly as in public mode, including `cookie_samesite = strict`, no anonymous access, no sign-up and no basic auth |
+| serve.toml | `listen = "127.0.0.1:9850"`, `base_path = ""` (the root), `trusted_proxies = []`: no proxy, so no forwarded header is believed |
+| Preflight | no DNS check; refuses to install on an **exit** relay; notes that Grafana and Prometheus share a non-exit relay, and warns when the RAM looks short for the relays plus the stack |
+
+**Why not on an exit.** Exits attract abuse complaints, port scans and denial-of-service attacks, and their addresses are on public exit lists. Monitoring should keep working when a relay is under attack and should not add to what an exit has to defend, so `--local` refuses when any relay on the server is an exit (`ExitRelay 1`, or an `ExitPolicy` that accepts anything, or `ReducedExitPolicy 1`). Use a non-exit relay, or a separate server with `--domain`.
+
+**Security reasoning.** Nothing new is reachable from the internet: the only way in is SSH, which the relay already exposes and which you already protect (keys only, ideally). The tunnel encrypts and authenticates the connection, so plain HTTP between your browser and its end of the tunnel is fine, and Grafana's login form is a second barrier behind SSH. The price is that Grafana and Prometheus share the relay's memory and CPU (about 300 to 500 MiB together), and that whoever can log in to the relay over SSH can reach Grafana's login page.
+
+**Switching modes.** The mode is stored in `/var/lib/tor-relay-setup/monitor.json`, so running `monitor install` again without `--local` or `--domain` keeps local mode. `--domain NAME` switches to public mode (Caddy, TCP 80/443, HTTPS). `--local` on a public install switches to local mode. It stops and disables Caddy, moves the Caddyfile it wrote to a `.bak.*` copy, and removes the ufw or nftables rules for TCP 80 and 443 that carry its comments, unless another service still listens on the port. A Caddyfile it did not write is left alone, and so are firewalld rules, which do not record who added them; the run names what you should close yourself. `monitor status` shows the tunnel command and checks fleet serve, Prometheus and Grafana (no Caddy). `monitor uninstall` works the same in both modes, and in local mode it does not touch Caddy.
 
 ### What monitor install sets up
 
