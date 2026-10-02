@@ -188,7 +188,7 @@ func TestInstanceUsageErrors(t *testing.T) {
 		{"--all outside status", []string{"console", "--all"}, "--all is only used with status"},
 		{"--all with --instance", []string{"status", "--all", "--instance", "relay2"}, "--all conflicts with --instance"},
 		{"invalid instance name", []string{"status", "--instance", "relay-2"}, `invalid instance name "relay-2"`},
-		{"--instance with uninstall", []string{"uninstall", "--instance", "relay2"}, "--instance is only used with status, console, setup and apply"},
+		{"--instance with uninstall", []string{"uninstall", "--instance", "relay2"}, "--instance is only used with status, console, setup, apply, proof and keys"},
 		{"--instance with --host", []string{"apply", "--config", "x.toml", "--host", "relay-1", "--instance", "relay2"}, "--instance cannot be combined with --host"},
 	}
 	for _, tt := range tests {

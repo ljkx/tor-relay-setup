@@ -1,0 +1,40 @@
+ ◆ tor-relay-setup vtest                                                                                       old-host
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bridge line · obfs4
+
+ Share this line  (y copies it, w saves it to /root/tor-bridge-line.txt)
+
+ obfs4 203.0.113.5:8443 9683BB02DA999159D376414EA8D0B4BBBAF95103
+ cert=Gqu7q1FpwhSbV6LegFzxcIIPqM6wHdJ3PTpTFd9pf9pBR5mgl02M2vjANqo4OasIPDUrIQ iat-mode=0
+
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Handing it out                                                                                                     │
+│ The Tor Project hands this bridge out (any). You can also give the line to people directly; each copy you share is │
+│ one more way for a censor to learn it.                                                                             │
+│ Users paste it in Tor Browser: Settings → Connection → Bridges → Add a bridge manually.                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check that it works                                                                                                │
+│ Test the obfs4 port from outside: https://bridges.torproject.org/scan/?address=203.0.113.5&port=8443               │
+│ Bridge authority test results: https://bridges.torproject.org/status?id=B2331AC0CA67CCA67C104B892DCCFA531B3DF50A   │
+│ Tor Metrics (after ~3 hours):                                                                                      │
+│ https://metrics.torproject.org/rs.html#details/B2331AC0CA67CCA67C104B892DCCFA531B3DF50A                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Status                                                                                                             │
+│ Transport           ✓ obfs4 listening                                                                              │
+│ Hashed fingerprint  B2331AC0CA67CCA67C104B892DCCFA531B3DF50A                                                       │
+│ Status              ✓ running                                                                                      │
+│ Flags               Running Stable Valid                                                                           │
+│ Transports          obfs4                                                                                          │
+│ Distributor         settings                                                                                       │
+│ Advertised          20.0 Mbit/s                                                                                    │
+│ First seen          2026-09-01 10:00:00                                                                            │
+│ Version             0.4.9.13 (recommended)                                                                         │
+│ Blocked in          ru (not handed out there)                                                                      │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+ y copy line  ·  w save to file  ·  esc back

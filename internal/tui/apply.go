@@ -216,6 +216,11 @@ func (ap *apply) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 		}
 		if msg.err == nil && !a.opt.DryRun {
 			ap.finger = readFingerprint(a.opt.Host, ap.setup.Instance())
+			if ap.setup.IsWebTunnel() {
+				// AssumeReachable 1: tor runs no ORPort self-test.
+				ap.reachDone = true
+				return ap, nil
+			}
 			return ap, ap.waitReachable(a)
 		}
 		return ap, nil
@@ -418,12 +423,17 @@ func (ap *apply) resultCard(a *App, w int) string {
 	if ap.setup.Family.Mode == "generate" {
 		body += "\n" + t.Subtle.Render("Copy the family key to your other relays: console → Relay family → Share.")
 	}
+	if ap.setup.IsBridge() {
+		body += "\n" + t.Subtle.Render("Share the bridge line from the console → Bridge line (y copies it).")
+	}
 	return panel(t, "Your relay", body, w, true)
 }
 
 func (ap *apply) reachText(a *App) string {
 	t := a.theme
 	switch {
+	case ap.setup.IsWebTunnel():
+		return t.Subtle.Render("WebTunnel runs no self-test: try the bridge line in Tor Browser")
 	case ap.reachDone && ap.reach.IPv4:
 		s := t.GoodText.Render(iconDone + " ORPort reachable from outside")
 		if ap.reach.IPv6 {

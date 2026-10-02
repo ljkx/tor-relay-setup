@@ -1,0 +1,40 @@
+ ◆ tor-relay-setup vtest                                                                             old-host
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Exit policy · verified with tor before anything is written
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ┃ Exit policy                                                                                            │
+│ ┃ › ReducedExitPolicy — tor's list of ~70 common services (recommended)                                  │
+│ ┃   Web only — ports 80 and 443                                                                          │
+│ ┃   Tor's default exit policy — everything but a few abuse-prone ports                                   │
+│ ┃   Custom — write your own accept/reject rules                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ enter next  ·  shift+tab back  ·  esc cancel

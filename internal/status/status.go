@@ -12,6 +12,7 @@ import (
 
 	"github.com/ljkx/tor-relay-setup/internal/family"
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/keys"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/service"
@@ -45,6 +46,7 @@ type Report struct {
 		ORPort      int    `json:"or_port,omitempty"`
 		IPv6        bool   `json:"ipv6"`
 		Exit        bool   `json:"exit"`
+		Bridge      bool   `json:"bridge"`
 		Sandbox     bool   `json:"sandbox"`
 		MetricsPort string `json:"metrics_port,omitempty"`
 		Bandwidth   string `json:"bandwidth,omitempty"`
@@ -71,8 +73,18 @@ type Report struct {
 		LegacyCount  int          `json:"legacy_myfamily"`
 	} `json:"family"`
 
-	Directory      *onionoo.Relay `json:"directory,omitempty"`
-	DirectoryError string         `json:"directory_error,omitempty"`
+	// Bridge is set for bridges: transport health and the bridge line.
+	Bridge *Bridge `json:"bridge,omitempty"`
+	// Keys is the state of the ed25519 identity keys (offline master key,
+	// signing certificate expiry).
+	Keys *keys.State `json:"keys,omitempty"`
+	// PublicIPv4 is the address the bridge line uses: from Tor's self-test
+	// notice, else a public interface address.
+	PublicIPv4 string `json:"-"`
+
+	Directory       *onionoo.Relay  `json:"directory,omitempty"`
+	BridgeDirectory *onionoo.Bridge `json:"bridge_directory,omitempty"`
+	DirectoryError  string          `json:"directory_error,omitempty"`
 
 	Warnings []string `json:"warnings,omitempty"`
 
@@ -88,6 +100,11 @@ type Options struct {
 	TorrcPath string        // default: the instance's torrc
 	Unit      string        // default: the instance's unit
 	Window    time.Duration // journal window for the self-test, default 24h
+	// CertWarnDays warns this many days before the signing certificate of
+	// an offline master key expires; default keys.DefaultWarnDays.
+	CertWarnDays int
+	// Now is the clock for certificate expiry; default time.Now.
+	Now func() time.Time
 }
 
 // Healthy reports whether nothing needs attention.
@@ -104,6 +121,9 @@ func Collect(ctx context.Context, h host.Host, opt Options) Report {
 	}
 	if opt.Window == 0 {
 		opt.Window = 24 * time.Hour
+	}
+	if opt.Now == nil {
+		opt.Now = time.Now
 	}
 	var r Report
 	r.CollectedAt = time.Now()
@@ -163,6 +183,9 @@ func Collect(ctx context.Context, h host.Host, opt Options) Report {
 		r.RecentLog = recent
 		r.Reachability.IPv4, r.Reachability.IPv6, r.Reachability.Failed = st.IPv4, st.IPv6, st.Failed
 		r.Reachability.Seen = st.IPv4 || st.IPv6 || st.Failed
+		if st.Address != "" {
+			r.PublicIPv4 = st.Address
+		}
 		mu.Unlock()
 	})
 
@@ -196,14 +219,77 @@ func Collect(ctx context.Context, h host.Host, opt Options) Report {
 		}
 
 		dataDir := doc.DataDirectoryOr(inst.DataDir)
-		if fp, err := h.ReadFile(strings.TrimRight(dataDir, "/") + "/fingerprint"); err == nil {
-			if fields := strings.Fields(string(fp)); len(fields) > 0 {
-				r.Relay.Fingerprint = strings.ToUpper(fields[len(fields)-1])
-			}
-		}
+		r.Relay.Fingerprint = ReadFingerprint(h, dataDir)
 
 		fkd, _ := doc.Get("FamilyKeyDirectory")
 		kd, _ := doc.Get("KeyDirectory")
+		keyDir := relay.Unquote(strings.TrimSpace(kd))
+		if keyDir == "" {
+			keyDir = strings.TrimRight(dataDir, "/") + "/keys"
+		}
+		if r.Relay.Configured {
+			st := keys.Inspect(h, keyDir, doc.OfflineMasterKey())
+			r.Keys = &st
+		}
+		if b, ok := doc.BridgeSettings(); ok {
+			r.Relay.Bridge = true
+			rb := &Bridge{Transport: string(b.Transport), Plugin: b.Plugin, Port: b.Port, Distribution: b.Distribution}
+			if rb.Distribution == "" {
+				rb.Distribution = "any"
+			}
+			_, err := h.Stat(b.Plugin)
+			rb.PluginInstalled = err == nil
+			rb.HashedFingerprint = hashedFingerprint(h, dataDir, r.Relay.Fingerprint)
+			r.Bridge = rb
+			if b.Port > 0 {
+				run(func() {
+					v4, v6, err := system.Listening(h, b.Port)
+					if err == nil {
+						mu.Lock()
+						rb.Listening = v4 || v6
+						mu.Unlock()
+					}
+				})
+			}
+			if b.Transport == relay.TransportObfs4 && b.Port > 0 && b.Port < 1024 && rb.PluginInstalled {
+				run(func() {
+					pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+					defer cancel()
+					res, err := h.Run(pctx, host.Command{Name: "getcap", Args: []string{b.Plugin}})
+					if err == nil {
+						mu.Lock()
+						rb.CapabilityMissing = !strings.Contains(res.Output, "cap_net_bind_service")
+						mu.Unlock()
+					}
+				})
+			}
+			if _, err := h.Stat(inst.WebTunnelSite()); err == nil && b.Transport == relay.TransportWebTunnel {
+				run(func() {
+					pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+					defer cancel()
+					state := "inactive"
+					if (service.Tor{Host: h, Unit: "nginx"}).Active(pctx) {
+						state = "active"
+					}
+					mu.Lock()
+					rb.WebServer = state
+					mu.Unlock()
+				})
+			}
+			if b.Transport == relay.TransportObfs4 {
+				run(func() {
+					pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+					defer cancel()
+					if ip := PublicIPv4(pctx, h); ip != "" {
+						mu.Lock()
+						if r.PublicIPv4 == "" {
+							r.PublicIPv4 = ip
+						}
+						mu.Unlock()
+					}
+				})
+			}
+		}
 		r.Family.KeyDirectory = family.KeyDirectory(fkd, kd, dataDir)
 		r.Family.IDs = doc.FamilyIDs()
 		r.Family.LegacyCount = len(doc.MyFamily())
@@ -228,7 +314,14 @@ func Collect(ctx context.Context, h host.Host, opt Options) Report {
 		}
 	}
 	wg.Wait()
+	if r.Bridge != nil && doc != nil {
+		b, _ := doc.BridgeSettings()
+		r.Bridge.Line, r.Bridge.LineComplete = BridgeLine(h, doc.DataDirectoryOr(inst.DataDir), b, r.Relay.Fingerprint, r.PublicIPv4)
+	}
 	r.Warnings = warnings(r)
+	if r.Keys != nil {
+		r.Warnings = append(r.Warnings, r.Keys.Warnings(opt.Now(), opt.CertWarnDays)...)
+	}
 	return r
 }
 
@@ -251,9 +344,11 @@ func warnings(r Report) []string {
 	if r.Relay.Configured && !r.Service.Active {
 		w = append(w, r.Service.Unit+" is not running")
 	}
-	if r.Relay.Configured && r.Service.Active && !r.Listener.IPv4 && !r.Listener.IPv6 {
+	// A WebTunnel bridge's ORPort is 127.0.0.1:auto: no port to probe.
+	if r.Relay.Configured && r.Service.Active && r.Relay.ORPort > 0 && !r.Listener.IPv4 && !r.Listener.IPv6 {
 		w = append(w, "nothing is listening on the ORPort")
 	}
+	w = append(w, bridgeWarnings(r)...)
 	if r.Reachability.Failed && !r.Reachability.IPv4 {
 		w = append(w, "Tor could not confirm the ORPort is reachable from outside")
 	}

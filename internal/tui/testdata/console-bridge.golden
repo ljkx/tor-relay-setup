@@ -1,0 +1,44 @@
+ ◆ tor-relay-setup vtest                                                                                                           old-host
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭────────────────────────────────╮ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
+│ Actions                        │ │ Relay                                           │ │ Health                                          │
+│  r  Refresh                    │ │ Nickname      BridgeOne                         │ │ Service       ✓ running                         │
+│     Re-check everything now    │ │ Fingerprint   ABCDEF01…ABCDEF01                 │ │ tor           ✓ 0.4.9.3                         │
+│  l  Live logs                  │ │ Mode          bridge (obfs4)                    │ │ Listener      ✓ TCP 9443                        │
+│  i  Bridge line                │ │ ORPort        9443                              │ │ Reachability  ✓ reachable                       │
+│  e  Edit settings              │ │ Transport     TCP 8443                          │ │ Transport     ✓ obfs4 listening                 │
+│  k  Identity keys              │ │ Distribution  any                               │ │                                                 │
+│  s  Restart Tor                │ ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
+│  o  Reload Tor                 │ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
+│  p  Stop / start Tor           │ │ Family                                          │ │ Traffic                                         │
+│  u  Update Tor                 │ │ none: bridges never join a family               │ │ Limit        1640 KBytes (burst 8200 KBytes)    │
+│  b  Back up keys               │ │                                                 │ │ Accounting   8381 GBytes per month, rule sum    │
+│  w  Reconfigure                │ │                                                 │ │ MetricsPort  off                                │
+│  n  Add a relay                │ │                                                 │ │ Live         enable MetricsPort (e) to see it   │
+│  q  Quit                       │ │                                                 │ │ Sandbox      no                                 │
+╰────────────────────────────────╯ ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
+                                   ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+                                   │ Tor Metrics                                                                                         │
+                                   │ Status       ✓ running                                                                              │
+                                   │ Flags        Running Stable Valid                                                                   │
+                                   │ Transports   obfs4                                                                                  │
+                                   │ Distributor  settings                                                                               │
+                                   │ Advertised   20.0 Mbit/s                                                                            │
+                                   │ First seen   2026-09-01 10:00:00                                                                    │
+                                   │ Version      0.4.9.13 (recommended)                                                                 │
+                                   │ Blocked in   ru (not handed out there)                                                              │
+                                   ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↑/↓ select  ·  enter run  ·  r refresh  ·  q quit

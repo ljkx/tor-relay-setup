@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,8 +54,22 @@ func Build(s config.Setup, f system.Facts) []Step {
 	if s.System.UnattendedUpgrades {
 		steps = append(steps, unattendedStep(f))
 	}
+	if bridgeStepNeeded(s) {
+		steps = append(steps, bridgeStep(s))
+	}
+	fw := firewallPlan(s, f)
+	if s.ManagedNginx() {
+		// certbot's HTTP-01 challenge needs port 80 open before it runs.
+		if fw.enabled {
+			steps = append(steps, firewallStep(s, f, fw))
+		}
+		steps = append(steps, webTunnelStep(s))
+	}
+	if s.IsExit() && s.Exit.Notice {
+		steps = append(steps, exitNoticeStep(s))
+	}
 	steps = append(steps, torrcStep(s))
-	if fw := firewallPlan(s, f); fw.enabled {
+	if fw.enabled && !s.ManagedNginx() {
 		steps = append(steps, firewallStep(s, f, fw))
 	}
 	steps = append(steps, serviceStep(s), stateStep())
@@ -70,6 +85,7 @@ func Packages(s config.Setup, f system.Facts) []string {
 	if s.IsExit() && s.Exit.Unbound {
 		pkgs = append(pkgs, "unbound")
 	}
+	pkgs = append(pkgs, bridgePackages(s)...)
 	if s.System.UnattendedUpgrades {
 		pkgs = append(pkgs, "unattended-upgrades", "apt-listchanges")
 	}
@@ -97,8 +113,23 @@ func preflightStep(s config.Setup, f system.Facts) Step {
 			// Other relays on this server: ports, family and the per-IP limit.
 			others := OtherInstances(e.Host, e.instance())
 			e.Setup.Relay.MetricsAddress = ResolveMetricsAddress(e.Host, e.Setup)
+			if e.Setup.IsWebTunnel() {
+				if resolveWebTunnelPath(e.Host, &e.Setup) {
+					r.Note(Info, "Generated the secret WebTunnel path "+e.Setup.Bridge.Path+"; torrc keeps it (or pin it with path = \""+e.Setup.Bridge.Path+"\" under [bridge] in relay.toml)")
+				}
+				if e.Setup.Bridge.LocalPort == 0 {
+					e.Setup.Bridge.LocalPort = relay.NextFreePort(relay.DefaultWebTunnelPort, usedPorts(others))
+				}
+			}
 			if err := Conflicts(e.Setup, others); err != nil {
 				return err
+			}
+			if offlineKeyGone(e.Host, e.instance()) && !e.Setup.Relay.OfflineMasterKey {
+				e.Setup.Relay.OfflineMasterKey = true
+				r.Note(Warn, "The ed25519 master key is not on this server: keeping OfflineMasterKey 1 so tor never creates a new identity")
+			}
+			for _, w := range e.Setup.Warnings() {
+				r.Note(Warn, w)
 			}
 			shared, err := sharedFamily(e.Host, e.Setup, others)
 			if err != nil {
@@ -227,10 +258,14 @@ func updateStep() Step {
 
 func packagesStep(s config.Setup, f system.Facts) Step {
 	pkgs := Packages(s, f)
+	change := "Install packages in one apt transaction: " + strings.Join(pkgs, " ")
+	if slices.Contains(pkgs, "obfs4proxy") {
+		change += " (lyrebird instead of obfs4proxy where apt offers it)"
+	}
 	return Step{
 		ID:      "packages",
 		Title:   "Install " + strings.Join(pkgs, ", "),
-		Changes: []string{"Install packages in one apt transaction: " + strings.Join(pkgs, " ")},
+		Changes: []string{change},
 		Weight:  30,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
 			c := apt.Client{Host: e.Host}
@@ -246,6 +281,16 @@ func packagesStep(s config.Setup, f system.Facts) Step {
 			want := Packages(e.Setup, e.Facts)
 			install := make([]string, 0, len(want))
 			for _, p := range want {
+				if p == "obfs4proxy" {
+					// lyrebird is obfs4proxy's successor; Debian packages it
+					// from forky on. Both serve obfs4 the same way.
+					p = obfs4Package(ctx, c)
+					e.Setup.Bridge.Plugin = relay.Obfs4ProxyPath
+					if p == "lyrebird" {
+						e.Setup.Bridge.Plugin = relay.LyrebirdPath
+					}
+					r.Note(Info, "obfs4 transport: "+p+" ("+e.Setup.Bridge.Plugin+")")
+				}
 				if p == "deb.torproject.org-keyring" && !e.Host.DryRun() {
 					if ok, _ := c.CandidateAvailable(ctx, p); !ok {
 						r.Note(Warn, "deb.torproject.org-keyring is not published for "+e.Facts.Codename+"; keeping the verified key file")
@@ -286,6 +331,18 @@ func packagesStep(s config.Setup, f system.Facts) Step {
 			return nil
 		},
 	}
+}
+
+// obfs4Package picks lyrebird when it is installed or apt has a candidate
+// for it, else obfs4proxy.
+func obfs4Package(ctx context.Context, c apt.Client) string {
+	if ok, _ := c.Installed(ctx, "lyrebird"); ok {
+		return "lyrebird"
+	}
+	if ok, _ := c.CandidateAvailable(ctx, "lyrebird"); ok {
+		return "lyrebird"
+	}
+	return "obfs4proxy"
 }
 
 func familyStep(s config.Setup) Step {
@@ -458,6 +515,9 @@ func torrcStep(s config.Setup) Step {
 			if e.Setup.Relay.MetricsPort && e.Setup.Relay.MetricsAddress == "" {
 				e.Setup.Relay.MetricsAddress = ResolveMetricsAddress(e.Host, e.Setup)
 			}
+			if e.Setup.IsWebTunnel() && e.Setup.Bridge.Path == "" {
+				return errNoPath
+			}
 			cfg := e.Setup.RelayConfig(ids)
 			if err := cfg.Validate(); err != nil {
 				return err
@@ -525,14 +585,24 @@ func firewallPlan(s config.Setup, f system.Facts) firewallChoice {
 }
 
 func firewallStep(s config.Setup, f system.Facts, choice firewallChoice) Step {
-	cmds := system.FirewallCommands(choice.fw, s.Relay.ORPort, f.SSHPorts, s.System.EnableUFW, choice.installUFW)
+	var ports []system.Port
+	var numbers []string
+	for _, p := range s.PublicPorts() {
+		ports = append(ports, system.Port{Number: p.Number, Label: p.Label})
+		numbers = append(numbers, strconv.Itoa(p.Number))
+	}
+	cmds := system.FirewallCommandsFor(choice.fw, ports, f.SSHPorts, s.System.EnableUFW, choice.installUFW)
 	changes := make([]string, 0, len(cmds))
 	for _, c := range cmds {
 		changes = append(changes, c.String())
 	}
+	title := "Open ORPort " + strconv.Itoa(s.Relay.ORPort) + " in " + choice.fw.Kind
+	if len(ports) > 1 || s.IsWebTunnel() {
+		title = "Open TCP " + strings.Join(numbers, ", ") + " in " + choice.fw.Kind
+	}
 	return Step{
 		ID:      "firewall",
-		Title:   "Open ORPort " + strconv.Itoa(s.Relay.ORPort) + " in " + choice.fw.Kind,
+		Title:   title,
 		Changes: changes,
 		Weight:  2,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
@@ -541,7 +611,7 @@ func firewallStep(s config.Setup, f system.Facts, choice firewallChoice) Step {
 					return err
 				}
 			}
-			r.Note(Info, "Open TCP "+strconv.Itoa(e.Setup.Relay.ORPort)+" in your provider's cloud firewall too")
+			r.Note(Info, "Open TCP "+strings.Join(numbers, ", ")+" in your provider's cloud firewall too")
 			return nil
 		},
 	}
@@ -570,14 +640,32 @@ func serviceStep(s config.Setup) Step {
 			if !waitFor(ctx, 15*time.Second, func() bool { return tor.Active(ctx) }) {
 				return errors.New(unit + " is not active; check journalctl -u " + unit + " -n 100")
 			}
-			r.Progress(70, "Waiting for the ORPort listener")
-			if waitFor(ctx, 20*time.Second, func() bool {
-				v4, v6, _ := system.Listening(e.Host, e.Setup.Relay.ORPort)
-				return v4 || v6
-			}) {
-				r.Note(Success, fmt.Sprintf("Tor is listening on TCP %d", e.Setup.Relay.ORPort))
-			} else {
-				r.Note(Warn, fmt.Sprintf("no listener on TCP %d yet; check the Tor log", e.Setup.Relay.ORPort))
+			type listener struct {
+				port int
+				what string
+			}
+			var wait []listener
+			switch s := e.Setup; {
+			case s.IsWebTunnel():
+				wait = []listener{{s.WebTunnelPort(), "the webtunnel transport"}}
+			case s.IsBridge():
+				wait = []listener{{s.Relay.ORPort, "Tor"}, {s.Bridge.Obfs4Port, "the obfs4 transport"}}
+			default:
+				wait = []listener{{s.Relay.ORPort, "Tor"}}
+			}
+			r.Progress(70, "Waiting for the listeners")
+			for _, l := range wait {
+				if waitFor(ctx, 20*time.Second, func() bool {
+					v4, v6, _ := system.Listening(e.Host, l.port)
+					return v4 || v6
+				}) {
+					r.Note(Success, fmt.Sprintf("%s is listening on TCP %d", l.what, l.port))
+				} else {
+					r.Note(Warn, fmt.Sprintf("no listener on TCP %d yet; check the Tor log", l.port))
+				}
+			}
+			if e.Setup.IsBridge() {
+				r.Note(Info, "The bridge line appears in the console (Bridge line) once tor has started the transport; Tor Metrics lists new bridges after about three hours")
 			}
 			if warnings, _ := tor.FamilyWarnings(ctx, e.RestartedAt); len(warnings) > 0 {
 				for _, w := range warnings {

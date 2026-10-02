@@ -5,25 +5,31 @@
 #   tor-relay-setup apply --config relay.toml --dry-run     # show every change, touch nothing
 #
 # The wizard writes the same format when you press "s" on the review screen.
+# Bridges: see bridge-obfs4.toml and bridge-webtunnel.toml next to this file.
 
 [relay]
 nickname = "ExampleRelay"
 contact = "email:ops[]example.org url:https://example.org proof:uri-familyid-ed25519 ciissversion:3"
 or_port = 9001
-mode = "guard"            # guard | exit
+mode = "guard"            # guard | exit | bridge
 ipv6 = ""                 # a global IPv6 address, or empty for none
-sandbox = true
+sandbox = true            # must be false for bridges (tor runs no transport with Sandbox 1)
 metrics_port = true       # local only: 127.0.0.1:9035, next free port from 9036 for other instances
 instance = ""             # empty: /etc/tor/torrc (tor@default); NAME: a second relay via tor-instance-create (tor@NAME)
+# offline_master_key = true  # OfflineMasterKey 1: the ed25519 master key is kept off the server
+                             # (set it with `tor-relay-setup keys offline`, which also exports the key)
 
 [exit]                    # only used when mode = "exit"
 provider_permission = false
-policy = "reduced"        # reduced | default
+policy = "reduced"        # reduced (tor's ReducedExitPolicy) | web (80, 443) | default | custom
+# custom_policy = ["accept *:22", "accept *:443", "reject *:*"]   # policy = "custom"; first match wins,
+                          # end with reject *:* (accept/reject ADDR:PORT, ADDR: * *4 *6 private 10.0.0.0/8 [2001:db8::]/32)
 ipv6_exit = true
 unbound = true
 lock_resolv_conf = false
+notice = false            # serve an exit notice page on port 80 (tor's DirPort 80 + DirPortFrontPage)
 
-[family]
+[family]                  # never used for bridges
 mode = "generate"         # none | generate | import
 key_name = "relay-family"
 import_key = ""           # /root/NAME.secret_family_key when mode = "import"

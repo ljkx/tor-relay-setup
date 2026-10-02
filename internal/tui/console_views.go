@@ -433,23 +433,26 @@ func newEditView(a *App, back *console) (screen, tea.Cmd) {
 	e := &editView{back: back, ans: answersFrom(s), doc: doc, was: s, metrics: plan.ResolveMetricsAddress(a.opt.Host, withMetrics)}
 	e.ans.ContactFormat = "free"
 	ans := e.ans
+	relayFields := []huh.Field{
+		huh.NewInput().Title("Nickname").Value(&ans.Nickname).Validate(func(s string) error {
+			if !relay.ValidNickname(strings.TrimSpace(s)) {
+				return errors.New("1–19 letters or digits")
+			}
+			return nil
+		}),
+		huh.NewInput().Title("ContactInfo").Value(&ans.ContactFree).Validate(func(s string) error {
+			if !relay.ValidContactInfo(strings.TrimSpace(s)) {
+				return errors.New("required, max 250 characters, no '#'")
+			}
+			return nil
+		}),
+		newConfirm().Title("MetricsPort on " + e.metrics + "?").Value(&ans.Metrics),
+	}
+	if !s.IsBridge() { // tor refuses pluggable transports with Sandbox 1
+		relayFields = append(relayFields, newConfirm().Title("Sandbox 1?").Description("Changing this restarts Tor.").Value(&ans.Sandbox))
+	}
 	e.form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Nickname").Value(&ans.Nickname).Validate(func(s string) error {
-				if !relay.ValidNickname(strings.TrimSpace(s)) {
-					return errors.New("1–19 letters or digits")
-				}
-				return nil
-			}),
-			huh.NewInput().Title("ContactInfo").Value(&ans.ContactFree).Validate(func(s string) error {
-				if !relay.ValidContactInfo(strings.TrimSpace(s)) {
-					return errors.New("required, max 250 characters, no '#'")
-				}
-				return nil
-			}),
-			newConfirm().Title("MetricsPort on "+e.metrics+"?").Value(&ans.Metrics),
-			newConfirm().Title("Sandbox 1?").Description("Changing this restarts Tor.").Value(&ans.Sandbox),
-		).Title("Relay"),
+		huh.NewGroup(relayFields...).Title("Relay"),
 		huh.NewGroup(
 			huh.NewSelect[string]().Title("Bandwidth").Options(bandwidthOptions(ans.BandwidthMode)...).Value(&ans.BandwidthMode),
 		).Title("Bandwidth"),
@@ -503,9 +506,11 @@ func (e *editView) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 			doc.SetMetricsPort("")
 		}
 		restart := s.Relay.Sandbox != e.was.Relay.Sandbox
-		if s.Relay.Sandbox {
+		switch {
+		case e.was.IsBridge(): // a bridge never sandboxes; leave torrc alone
+		case s.Relay.Sandbox:
 			doc.Set("Sandbox", "1")
-		} else {
+		default:
 			doc.Set("Sandbox", "0")
 		}
 		data := doc.Bytes()

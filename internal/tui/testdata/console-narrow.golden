@@ -50,6 +50,8 @@
 │  l  Live logs                                                              │
 │  f  Relay family                                                           │
 │  e  Edit settings                                                          │
+│  k  Identity keys                                                          │
+│  c  ContactInfo proof                                                      │
 │  s  Restart Tor                                                            │
 │  o  Reload Tor                                                             │
 │  p  Stop / start Tor                                                       │
@@ -59,8 +61,6 @@
 │  n  Add a relay                                                            │
 │  q  Quit                                                                   │
 ╰────────────────────────────────────────────────────────────────────────────╯
-
-
 
 
 

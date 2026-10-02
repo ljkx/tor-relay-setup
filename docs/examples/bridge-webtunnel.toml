@@ -1,0 +1,51 @@
+# Example tor-relay-setup configuration for a WebTunnel bridge.
+#
+#   sudo tor-relay-setup apply --config bridge-webtunnel.toml
+#
+# WebTunnel hides a bridge behind an ordinary HTTPS website: a web server
+# hands one secret path to the webtunnel server on 127.0.0.1, and everything
+# else looks like a normal site. You need a domain whose A/AAAA records point
+# at this server. Follows the Tor Project's guide:
+# https://community.torproject.org/relay/setup/webtunnel/
+#
+# With web_server = "nginx" the tool installs nginx, writes
+# /etc/nginx/sites-available/tor-webtunnel-<instance> (checked with nginx -t),
+# and opens TCP 443 (and 80 for certbot). The transport comes from the Tor
+# Project repository's webtunnel package (/usr/bin/webtunnel-server).
+
+[relay]
+nickname = "ExampleWebTunnel"
+contact = "email:ops[]example.org ciissversion:3"
+or_port = 9001            # unused: a WebTunnel bridge listens on 127.0.0.1:auto
+mode = "bridge"
+sandbox = false           # required for bridges
+metrics_port = false
+
+[bridge]
+transport = "webtunnel"
+domain = "bridge.example.org"
+path = ""                 # secret path; empty generates 24 random characters (kept in torrc afterwards)
+distribution = "https"    # WebTunnel bridges are only handed out by the https distributor; none = share yourself
+web_server = "nginx"      # nginx (managed) | manual (you run the web server; the review shows the location block)
+certificate = "certbot"   # certbot | existing
+certbot_email = ""        # optional: Let's Encrypt account and expiry mail
+certbot_agree_tos = false # must be true for certificate = "certbot": certbot accepts the Let's Encrypt
+                          # Subscriber Agreement for you (https://letsencrypt.org/repository/)
+# certificate = "existing"
+# cert_file = "/etc/ssl/certs/bridge.example.org.pem"
+# key_file = "/etc/ssl/private/bridge.example.org.key"
+
+[family]
+mode = "none"
+
+[bandwidth]
+mode = "steady"
+monthly_quota = "10TB"
+headroom_percent = 10
+billing = "sum"
+
+[system]
+unattended_upgrades = true
+nyx = true
+firewall = "auto"
+enable_ufw = true

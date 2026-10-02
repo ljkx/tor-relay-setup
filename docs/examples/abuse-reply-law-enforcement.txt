@@ -1,0 +1,55 @@
+Subject: Re: [CASE / REFERENCE NUMBER] - request about [IP ADDRESS]
+
+# Reply to a request for information from police or another authority about
+# traffic from your exit relay.
+#
+# Written for tor-relay-setup in our own words. Background: the EFF Legal FAQ
+# for Tor Relay Operators (published by the Tor Project) and the Tor Project's
+# exit guidelines:
+#   https://community.torproject.org/relay/community-resources/eff-tor-legal-faq/
+#   https://community.torproject.org/relay/community-resources/tor-exit-guidelines/
+# This is not legal advice. Before you answer a subpoena, court order or
+# warrant, talk to a lawyer; do not ignore it, and do not hand over data or
+# equipment beyond what the law requires. The EFF can help operators in the
+# United States (info@eff.org); elsewhere, ask a local digital rights group.
+# The Tor Project can provide a letter confirming what Tor is
+# (frontdesk@torproject.org). Lines starting with '#' are notes for you;
+# delete them before sending.
+
+Dear [OFFICER / AGENCY],
+
+Thank you for your inquiry [REFERENCE NUMBER] dated [DATE] about activity
+from [IP ADDRESS] at [TIME AND TIME ZONE].
+
+[IP ADDRESS] is a Tor exit relay, [NICKNAME], which I operate as a
+volunteer. Tor is a free, open network used by journalists, activists,
+businesses, law enforcement agencies and members of the public to protect
+their privacy. Each connection passes through three relays chosen at random;
+an exit relay such as this one forwards the last step of the connection on
+behalf of a Tor user it cannot identify.
+
+The relay does not log the connections it forwards, and the design of Tor
+means that this server never learns the original address of a user. I am
+therefore unable to provide information identifying the person responsible
+for the activity you describe, and the server itself contains no such
+information.
+
+You can confirm that [IP ADDRESS] was part of the Tor network at the
+reported time with the Tor Project's ExoneraTor service:
+https://metrics.torproject.org/exonerator.html?ip=[IP ADDRESS]&timestamp=[YYYY-MM-DD]
+
+General information for law enforcement about Tor is available from the
+Tor Project: https://support.torproject.org/abuse/
+
+# If you received formal legal process, say so and name your lawyer:
+I have received [SUBPOENA / ORDER] [NUMBER] and asked [LAWYER, FIRM] to
+handle it; please direct further correspondence about it to them at
+[LAWYER CONTACT].
+
+I am happy to answer further questions about how the relay works.
+
+Sincerely,
+[YOUR NAME]
+[ORGANISATION, IF ANY]
+[POSTAL ADDRESS]
+[CONTACT EMAIL] · [PHONE]

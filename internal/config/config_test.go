@@ -177,7 +177,7 @@ func TestValidateReportsEachProblem(t *testing.T) {
 		{"contact with hash", func(s *Setup) { s.Relay.Contact = "ops #1" }, "relay.contact"},
 		{"port zero", func(s *Setup) { s.Relay.ORPort = 0 }, "relay.or_port"},
 		{"port too high", func(s *Setup) { s.Relay.ORPort = 65536 }, "relay.or_port"},
-		{"bad mode", func(s *Setup) { s.Relay.Mode = "bridge" }, "relay.mode"},
+		{"bad mode", func(s *Setup) { s.Relay.Mode = "middle" }, "relay.mode"},
 		{"link-local IPv6", func(s *Setup) { s.Relay.IPv6 = "fe80::1" }, "relay.ipv6"},
 		{"bracketed IPv6", func(s *Setup) { s.Relay.IPv6 = "[2001:db8::1]" }, "relay.ipv6"},
 		{"bad family mode", func(s *Setup) { s.Family.Mode = "join" }, "family.mode"},
@@ -221,7 +221,7 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 	t.Parallel()
 	s := validGuard()
 	s.Relay.Nickname = "not valid!"
-	s.Relay.Mode = "bridge"
+	s.Relay.Mode = "middle"
 	s.Family.Mode = "join"
 	s.System.Hostname = "under_score"
 	s.Bandwidth.Mode = "turbo"
