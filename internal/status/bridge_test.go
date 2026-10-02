@@ -1,8 +1,8 @@
 package status
 
 import (
-	"os"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -256,7 +256,7 @@ func TestCollectSigningKeyExpiry(t *testing.T) {
 
 func TestBridgeLineStaysOutOfJSON(t *testing.T) {
 	var r Report
-	r.Bridge.Line = "obfs4 203.0.113.5:443 ABCDEF cert=secret iat-mode=0"
+	r.Bridge = &Bridge{Line: "obfs4 203.0.113.5:443 ABCDEF cert=secret iat-mode=0"}
 	data, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
