@@ -41,6 +41,25 @@ func metrics(w http.ResponseWriter, _ *http.Request) {
 	conns := 1480 + int(40*math.Sin(time.Since(start).Seconds()/9))
 	fmt.Fprintf(w, "tor_relay_connections{type=\"OR\",direction=\"received\",state=\"opened\",family=\"ipv4\"} %d\n", conns)
 	fmt.Fprintf(w, "tor_relay_connections{type=\"OR\",direction=\"initiated\",state=\"opened\",family=\"ipv4\"} %d\n", conns/3)
+
+	// A healthy relay's load counters (same series as tor 0.4.9): busy
+	// handshakes, nothing dropped, plenty of sockets left.
+	handshakes := 9_400_000 + uint64(time.Since(start).Seconds()*310)
+	fmt.Fprintf(w, "# TYPE tor_relay_load_socket_total gauge\n")
+	fmt.Fprintf(w, "tor_relay_load_socket_total{state=\"opened\"} %d\n", conns+conns/3+40)
+	fmt.Fprintf(w, "tor_relay_load_socket_total 1048544\n")
+	fmt.Fprintf(w, "# TYPE tor_relay_load_global_rate_limit_reached_total counter\n")
+	fmt.Fprintf(w, "tor_relay_load_global_rate_limit_reached_total{side=\"read\"} 0\n")
+	fmt.Fprintf(w, "tor_relay_load_global_rate_limit_reached_total{side=\"write\"} 0\n")
+	fmt.Fprintf(w, "# TYPE tor_relay_load_tcp_exhaustion_total counter\n")
+	fmt.Fprintf(w, "tor_relay_load_tcp_exhaustion_total 0\n")
+	fmt.Fprintf(w, "# TYPE tor_relay_load_oom_bytes_total counter\n")
+	fmt.Fprintf(w, "tor_relay_load_oom_bytes_total{subsys=\"cell\"} 0\n")
+	fmt.Fprintf(w, "# TYPE tor_relay_load_onionskins_total counter\n")
+	fmt.Fprintf(w, "tor_relay_load_onionskins_total{type=\"ntor\",action=\"processed\"} %d\n", handshakes)
+	fmt.Fprintf(w, "tor_relay_load_onionskins_total{type=\"ntor\",action=\"dropped\"} 0\n")
+	fmt.Fprintf(w, "tor_relay_load_onionskins_total{type=\"ntor_v3\",action=\"processed\"} %d\n", handshakes/4)
+	fmt.Fprintf(w, "tor_relay_load_onionskins_total{type=\"ntor_v3\",action=\"dropped\"} 0\n")
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
