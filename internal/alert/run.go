@@ -66,7 +66,7 @@ func Gather(ctx context.Context, h host.Host, opt GatherOptions) Input {
 		}
 	}
 	if doc != nil {
-		in.Accounting, in.AccountingErr = AccountingFor(h, doc, now())
+		in.Accounting, in.AccountingErr = AccountingIn(h, doc, inst.DataDir, now())
 	}
 	if opt.CheckUpdates {
 		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -106,6 +106,13 @@ func Identify(h host.Host, torrcPath string) Input {
 // AccountingFor assesses AccountingMax from torrc and tor's state file. It
 // returns nil (and no error) when accounting is not configured.
 func AccountingFor(h host.Host, doc *relay.Document, now time.Time) (*metrics.Accounting, string) {
+	return AccountingIn(h, doc, doc.DataDirectory(), now)
+}
+
+// AccountingIn is AccountingFor with the DataDirectory a torrc without one
+// uses: a Debian tor instance keeps its state in its own DataDirectory,
+// which the instance's defaults torrc sets.
+func AccountingIn(h host.Host, doc *relay.Document, defaultDataDir string, now time.Time) (*metrics.Accounting, string) {
 	maxValue, ok := doc.Get("AccountingMax")
 	if !ok {
 		return nil, ""
@@ -117,7 +124,7 @@ func AccountingFor(h host.Host, doc *relay.Document, now time.Time) (*metrics.Ac
 		return nil, err.Error()
 	}
 	var u metrics.AccountingUsage
-	data, err := h.ReadFile(strings.TrimRight(doc.DataDirectory(), "/") + "/state")
+	data, err := h.ReadFile(strings.TrimRight(doc.DataDirectoryOr(defaultDataDir), "/") + "/state")
 	if err == nil {
 		u, err = metrics.ParseState(data)
 	}

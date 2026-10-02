@@ -57,6 +57,7 @@ const detailsBody = `{"version":"8.0","relays":[{
   "or_addresses":["203.0.113.5:9001","[2001:db8::5]:9001"],
   "family_ids":["hQ3yMkBnCdE4F5g6H7i8J9k0LmNoPqRsTuVwXyZ+/ab"],
   "exit_probability":0,"guard_probability":0.0012,"middle_probability":0.0008,
+  "last_restarted":"2026-09-28 04:12:33","country":"DE","country_name":"Germany","as":"AS24940","as_name":"Hetzner Online GmbH",
   "unknown_field":{"x":1}
 }]}`
 
@@ -75,9 +76,16 @@ func TestDetails(t *testing.T) {
 		ORAddresses:      []string{"203.0.113.5:9001", "[2001:db8::5]:9001"},
 		FamilyIDs:        []string{"hQ3yMkBnCdE4F5g6H7i8J9k0LmNoPqRsTuVwXyZ+/ab"},
 		GuardProbability: 0.0012, MiddleProbability: 0.0008,
+		LastRestarted: "2026-09-28 04:12:33", Country: "de", AS: "AS24940", ASName: "Hetzner Online GmbH",
 	}
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("got %+v\nwant %+v", r, want)
+	}
+	if got := ParseTime(r.LastRestarted); !got.Equal(time.Date(2026, 9, 28, 4, 12, 33, 0, time.UTC)) {
+		t.Errorf("ParseTime(last_restarted) = %v", got)
+	}
+	if !ParseTime("").IsZero() || !ParseTime("yesterday").IsZero() {
+		t.Error("ParseTime accepted garbage")
 	}
 	req := s.request()
 	if req.URL.Path != "/details" || req.URL.Query().Get("lookup") != fp1 {

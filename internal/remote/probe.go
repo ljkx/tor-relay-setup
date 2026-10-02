@@ -38,8 +38,10 @@ func (f *Fleet) Probe(ctx context.Context, dest string) fleet.HostProbe {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	hp := fleet.HostProbe{Address: dest}
+	start := time.Now()
 	res, err := f.Host.Run(ctx, f.ssh(dest, installedScript("fleet-probe", false), false))
 	hp.At = time.Now()
+	hp.Duration = hp.At.Sub(start)
 	if err != nil {
 		hp.State, hp.Detail = classify(res.Output, err)
 		return hp

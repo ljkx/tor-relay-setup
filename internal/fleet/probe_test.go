@@ -71,8 +71,11 @@ func TestProbeLocalJSONShape(t *testing.T) {
 		t.Fatalf("relays: %s", data)
 	}
 	r := relays[0].(map[string]any)
-	if keysOf(r) != "report traffic" {
+	if keysOf(r) != "report sample traffic" {
 		t.Errorf("relay keys: %s", keysOf(r))
+	}
+	if sample := r["sample"].(map[string]any); sample["connections"] != 42.0 || sample["load"] == nil {
+		t.Errorf("sample: %v", sample)
 	}
 	traffic := r["traffic"].(map[string]any)
 	if keysOf(traffic) != "at connections read written" || traffic["at"] != "2026-10-01T12:00:00Z" || traffic["read"] != 1000.0 || traffic["connections"] != 42.0 {
@@ -156,5 +159,54 @@ func TestParseProbe(t *testing.T) {
 	// A relay without a report is tolerated.
 	if p, err := ParseProbe(`{"version":"v1","relays":[{"report":null,"traffic":null}]}`); err != nil || p.Relays[0].Instance() != DefaultInstance {
 		t.Errorf("null report: %+v, %v", p, err)
+	}
+}
+
+func TestParseProbeFromAnOlderHost(t *testing.T) {
+	// v3.2.0's document: report and traffic only.
+	old := `{"version":"v3.2.0","relays":[{"report":{"collected_at":"2026-10-01T12:00:00Z","instance":"default","tor":{"installed":true,"version":"0.4.9.3","supported":true},` +
+		`"service":{"unit":"tor@default","active":true},"relay":{"configured":true,"nickname":"Old","fingerprint":"` + fp("1") + `","or_port":9001},` +
+		`"listener":{"ipv4":true,"ipv6":false},"family":{"legacy_myfamily":0}},"traffic":{"at":"2026-10-01T12:00:00Z","read":10,"written":20,"connections":3}}]}`
+	p, err := ParseProbe(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := p.Relays[0]
+	if r.Sample != nil || r.Accounting != nil || r.Report.Keys != nil || r.Report.Bridge != nil {
+		t.Errorf("fields an old host cannot send: %+v", r)
+	}
+	s := r.MetricsSample()
+	if s == nil || s.Read != 10 || s.Written != 20 || s.Connections != 3 || s.Load.Seen {
+		t.Errorf("sample from traffic = %+v", s)
+	}
+	if (RelayProbe{}).MetricsSample() != nil {
+		t.Error("no traffic, no sample")
+	}
+}
+
+func TestProbeCarriesAccountingKeysAndBridgeButNoBridgeLine(t *testing.T) {
+	torrc := "Nickname ProbeBridge\nORPort 9001\nBridgeRelay 1\nServerTransportPlugin obfs4 exec /usr/bin/lyrebird\nServerTransportListenAddr obfs4 0.0.0.0:443\n" +
+		"ExtORPort auto\nAccountingMax 100 GBytes\nAccountingStart month 1 00:00\n"
+	h := relayHost(torrc, true)
+	h.Files["/usr/bin/lyrebird"] = []byte("binary")
+	h.Files["/var/lib/tor/bridgelines"] = []byte("Bridge obfs4 203.0.113.9:443 ABCDEF0123456789ABCDEF0123456789ABCDEF01 cert=SECRETCERT iat-mode=0\n")
+	h.Files["/var/lib/tor/state"] = []byte("AccountingBytesReadInInterval 1000\nAccountingBytesWrittenInInterval 2000\nAccountingIntervalStart 2026-10-01 00:00:00\nLastWritten 2099-10-01 00:00:00\n")
+	p := ProbeLocal(context.Background(), h, "v9", nil)
+	r := p.Relays[0]
+	if r.Accounting == nil || !r.Accounting.Enabled || r.Accounting.Max != 100<<30 {
+		t.Errorf("accounting = %+v (%s)", r.Accounting, r.AccountingError)
+	}
+	if r.Report.Bridge == nil || r.Report.Bridge.HashedFingerprint == "" || r.Report.Keys == nil {
+		t.Fatalf("bridge %+v keys %+v", r.Report.Bridge, r.Report.Keys)
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "SECRETCERT") || strings.Contains(string(data), "203.0.113.9") {
+		t.Errorf("the bridge line is in the probe document: %s", data)
+	}
+	if !strings.Contains(string(data), `"accounting":{"enabled":true`) || !strings.Contains(string(data), `"hashed_fingerprint"`) {
+		t.Errorf("document: %s", data)
 	}
 }

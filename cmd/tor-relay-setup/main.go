@@ -472,8 +472,9 @@ func loadMetrics(ctx context.Context, h host.Host, insts []relay.Instance, repor
 			}
 		}
 		if i < len(insts) {
-			if data, err := h.ReadFile(insts[i].OrDefault().TorrcPath); err == nil {
-				m.Accounting, _ = alert.AccountingFor(h, relay.ParseDocument(data), time.Now())
+			inst := insts[i].OrDefault()
+			if data, err := h.ReadFile(inst.TorrcPath); err == nil {
+				m.Accounting, _ = alert.AccountingIn(h, relay.ParseDocument(data), inst.DataDir, time.Now())
 			}
 		}
 		out[i] = m
