@@ -25,8 +25,10 @@ type Bridge struct {
 	// bridges.torproject.org without revealing its fingerprint.
 	HashedFingerprint string `json:"hashed_fingerprint,omitempty"`
 	// Line is the bridge line to share (without the "Bridge " prefix).
-	// It is a secret of sorts: whoever has it can use and block the bridge.
-	Line string `json:"bridge_line,omitempty"`
+	// It is a secret of sorts: whoever has it can use and block the bridge,
+	// so it stays out of JSON (status --json feeds monitoring systems and
+	// fleet probes); the text output and the console show it.
+	Line string `json:"-"`
 	// LineComplete is false while placeholders remain (no public address
 	// known yet, or tor has not started the transport).
 	LineComplete bool `json:"bridge_line_complete"`

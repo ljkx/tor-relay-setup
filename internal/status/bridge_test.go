@@ -2,6 +2,7 @@ package status
 
 import (
 	"os"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -250,5 +251,17 @@ func TestCollectSigningKeyExpiry(t *testing.T) {
 	gone := collect(t, fx.fake(), Options{Now: func() time.Time { return expiry.Add(time.Hour) }})
 	if !hasWarning(gone, "expired on 2036-10-01") {
 		t.Errorf("expired warning missing: %q", gone.Warnings)
+	}
+}
+
+func TestBridgeLineStaysOutOfJSON(t *testing.T) {
+	var r Report
+	r.Bridge.Line = "obfs4 203.0.113.5:443 ABCDEF cert=secret iat-mode=0"
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "cert=secret") {
+		t.Errorf("bridge line leaked into JSON: %s", data)
 	}
 }
