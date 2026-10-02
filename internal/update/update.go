@@ -77,6 +77,8 @@ type Updater struct {
 
 	Out    io.Writer
 	DryRun bool // download and verify, but never replace the binary
+	// Replaced is set once Update has installed a new binary.
+	Replaced bool
 }
 
 // New returns an Updater for the public repository that runs helpers on
@@ -255,6 +257,7 @@ func (u *Updater) Update(ctx context.Context) error {
 	if err := replace(exe, f); err != nil {
 		return err
 	}
+	u.Replaced = true
 	fmt.Fprintf(u.Out, "Updated %s to %s.\n", exe, res.Latest)
 	return nil
 }

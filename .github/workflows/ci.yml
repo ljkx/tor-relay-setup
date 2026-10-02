@@ -178,6 +178,16 @@ jobs:
           sudo bin/tor-relay-setup apply --config again.toml --yes --plain
           sudo grep -Fx "FamilyId ${id}" /etc/tor/torrc
           systemctl is-active tor@default
+      - name: A family key copied without its .public_family_id still counts
+        run: |
+          # tor needs only NAME.secret_family_key, so operators often copy
+          # just that file: the FamilyId is derived from the key itself.
+          pub=$(sudo find /var/lib/tor/keys -name '*.public_family_id' -print -quit)
+          sudo mv "$pub" "$RUNNER_TEMP/saved.public_family_id"
+          sudo bin/tor-relay-setup status --json > nopub.json || true
+          jq -e --arg id "$(jq -r '.family.ids[0]' status.json)" \
+            '.family.missing_keys == null and .family.keys[0].ID == $id' nopub.json
+          sudo mv "$RUNNER_TEMP/saved.public_family_id" "$pub"
       - name: A second relay on the same server
         run: |
           sed -e 's/^nickname = "CiRelay"/nickname = "CiRelay2"\ninstance = "relay2"/' \

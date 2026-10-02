@@ -8,6 +8,7 @@ package family
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,6 +16,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"filippo.io/edwards25519"
 
 	"github.com/ljkx/tor-relay-setup/internal/host"
 )
@@ -39,13 +42,29 @@ var (
 type Key struct {
 	Name string // file name without the .secret_family_key suffix
 	Path string // path of the secret key file
-	ID   string // FamilyId from the sibling .public_family_id; "" when missing or invalid
+	ID   string // FamilyId from the sibling .public_family_id, else derived from the key
 }
 
 // ValidKey reports whether data looks like a secret family key: exactly 96
 // bytes starting with KeyHeader.
 func ValidKey(data []byte) bool {
 	return len(data) == keySize && bytes.HasPrefix(data, []byte(KeyHeader))
+}
+
+// IDFromSecret derives the FamilyId of a secret family key: the unpadded
+// base64 of its ed25519 public key. The file holds a 32-byte header and
+// tor's 64-byte expanded secret key, whose first half is the clamped
+// scalar. "" when data is not a valid key. tor needs only the secret key,
+// so relays set up by hand often have no NAME.public_family_id.
+func IDFromSecret(data []byte) string {
+	if !ValidKey(data) {
+		return ""
+	}
+	s, err := edwards25519.NewScalar().SetBytesWithClamping(data[32:64])
+	if err != nil {
+		return ""
+	}
+	return base64.RawStdEncoding.EncodeToString(new(edwards25519.Point).ScalarBaseMult(s).Bytes())
 }
 
 // ValidID reports whether id is a FamilyId: 43 unpadded base64 characters.
@@ -94,6 +113,11 @@ func Installed(h host.Host, dir string) ([]Key, error) {
 			if id := strings.TrimSpace(string(raw)); ValidID(id) {
 				k.ID = id
 			}
+		}
+		if k.ID == "" {
+			// tor needs only the secret key, so keys copied by hand
+			// usually come without NAME.public_family_id.
+			k.ID = IDFromSecret(data)
 		}
 		keys = append(keys, k)
 	}
