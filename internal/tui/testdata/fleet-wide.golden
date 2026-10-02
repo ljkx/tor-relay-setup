@@ -1,0 +1,40 @@
+ ◆ tor-relay-setup vtest                                                                          fleet.toml · 6 relays
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Fleet                                                                                                              │
+│ Relays     ! 3 / 6 running                                    Live        ↓ 160.0 Mbit/s  ↑ 156.0 Mbit/s           │
+│ Hosts      5 · 1 unreachable · 1 need self-update             Advertised  400.0 Mbit/s                             │
+│ Weight     63000 · 0.063% of the network                      30 days     ▆▇▇████▇▇▆▆▅▄▄▄▄▄▅▅▆▇▇████▇▇▆▆           │
+│ Selection  guard 0.070% · middle 0.065% · exit 0%                         in 83.7 TB · out 83.7 TB                 │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Needs attention (7)                                                                                                │
+│ ! root@relay3.example.org: unreachable over ssh (ssh: connect to host relay3.example.org port 22: Connection time… │
+│ ! root@relay5.example.org: tor-relay-setup too old on this host — run self-update                                  │
+│ ! MyRelay2: Tor could not confirm the ORPort is reachable from outside                                             │
+│ ! MyRelay5 (relay4.example.org/second): tor@second is not running                                                  │
+│ ! MyRelay5 (relay4.example.org/second): not in Tor Metrics (new relays appear after about 3 hours)                 │
+│ ! tor versions differ: 0.4.9.3 ×3, 0.4.8.16 ×1                                                                     │
+│ ! MyRelay2 lost Guard since the last dashboard run                                                                 │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Relays · sorted by inventory                                                                                       │
+│    HOST                          NICKNAME             INSTANCE   FLAGS    TOR                LIVE    WEIGHT  WARN  │
+│ ✓  relay1.example.org            MyRelay1             default    GSFHVRD  0.4.9.3    196.0 Mbit/s     41200     0  │
+│ !  relay2.example.org            MyRelay2             default    SFVR     0.4.9.3     40.0 Mbit/s      9800     1  │
+│ ✗  relay3.example.org            MyRelay3             default                                                      │
+│ ✓  relay4.example.org            MyRelay4             default    FVR      0.4.8.16    80.0 Mbit/s     12000     0  │
+│ ✗  relay4.example.org            MyRelay5             second              0.4.9.3                               1  │
+│ !  relay5.example.org            MyRelay6             default                                                      │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+ ↑/↓ select  ·  enter details  ·  s/S sort  ·  / filter  ·  r refresh · 4s ago  ·  R/O/U restart/reload/update  ·  q quit

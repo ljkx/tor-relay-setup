@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
+	"github.com/ljkx/tor-relay-setup/internal/fleet"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
@@ -46,6 +47,16 @@ Usage:
   tor-relay-setup apply --config FILE       apply a saved relay.toml (add --yes to skip the confirmation)
   tor-relay-setup apply --config FILE --host [user@]HOST [--host ...] [--keep-going]
                                             apply it to remote relays over ssh, one after another
+  tor-relay-setup apply --inventory FILE [--parallel N] [--only HOST[,HOST]] [--keep-going]
+                                            apply a fleet inventory (fleet.toml) over ssh
+  tor-relay-setup fleet [--inventory FILE]  fleet dashboard (plain status without a terminal)
+  tor-relay-setup fleet status [--format text|json|prometheus]
+                                            fleet status once; text and json exit 1 when something
+                                            needs attention
+  tor-relay-setup fleet restart|reload|update-tor [--only HOST[,HOST]] [--yes] [--keep-going]
+                                            one relay at a time, waiting until each is back
+  tor-relay-setup tor restart|reload|update [--yes]
+                                            restart and verify, reload, or upgrade tor on this relay
   tor-relay-setup console                   open the operator console
   tor-relay-setup status [--json]           print relay health (exit code 1 when something needs attention)
   tor-relay-setup status --format text|json|prometheus
@@ -65,7 +76,10 @@ Flags:
   --json           same as --format json
   --format FORMAT  status output: text (default), json, or prometheus
   --host DEST      apply on [user@]host over ssh; repeat for several relays
-  --keep-going     apply --host: continue with the next host after a failure
+  --keep-going     apply --host/--inventory, fleet actions: continue after a failure
+  --inventory FILE fleet inventory for apply and fleet (fleet: default fleet.toml)
+  --parallel N     apply --inventory: servers applied at once after the family host
+  --only LIST      apply --inventory, fleet: only these hosts or nicknames (comma-separated)
   --check          self-update: only report whether a newer release exists
   --instance NAME  the tor instance for status, console, setup and apply (overrides
                    relay.instance); "default" is /etc/tor/torrc
@@ -82,6 +96,13 @@ Remote apply (--host):
   removed afterwards. The remote user must be root or have passwordless sudo. With
   family.mode = "generate", the first host creates the family key and every further host
   imports it, so the whole fleet is one family. --dry-run runs apply --dry-run remotely.
+
+Fleets (--inventory, fleet):
+  fleet.toml names a base relay.toml, a nickname template ({n}, {host}) and one [[host]] per
+  relay; any relay.toml table can be overridden per host. Everything is validated before the
+  first connection. ssh connections are shared per host for the run (ControlMaster). The
+  dashboard and fleet status run tor-relay-setup fleet-probe on every host, so each host needs
+  tor-relay-setup installed (install.sh); rolling actions run tor-relay-setup tor ... there.
 
 Metrics (node_exporter textfile collector; run from cron or a systemd timer):
   tor-relay-setup status --format prometheus > /var/lib/prometheus/node-exporter/tor_relay.prom
@@ -102,6 +123,7 @@ var (
 	newFleet        = remote.New
 	executable      = os.Executable
 	stdinIsTerminal = isTerminal
+	isInteractive   = tui.Interactive
 )
 
 // hostList collects repeated --host flags.
@@ -134,6 +156,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var hosts hostList
 	fs.Var(&hosts, "host", "")
 	keepGoing := fs.Bool("keep-going", false, "")
+	inventory := fs.String("inventory", "", "")
+	parallel := fs.Int("parallel", 0, "")
+	only := fs.String("only", "", "")
 	check := fs.Bool("check", false, "")
 	instanceName := fs.String("instance", "", "")
 	all := fs.Bool("all", false, "")
@@ -141,13 +166,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.BoolVar(help, "h", false, "")
 	showVersion := fs.Bool("version", false, "")
 	// Flags may come before or after the command: parse up to the first
-	// positional argument (the command), then parse what follows it.
+	// positional argument (the command), then parse what follows it. The
+	// tor and fleet commands take one subcommand the same way.
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	cmd := ""
+	cmd, sub := "", ""
 	if fs.NArg() > 0 {
 		cmd = fs.Arg(0)
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return 2
+		}
+	}
+	if (cmd == "tor" || cmd == "fleet") && fs.NArg() > 0 {
+		sub = fs.Arg(0)
 		if err := fs.Parse(fs.Args()[1:]); err != nil {
 			return 2
 		}
@@ -169,25 +201,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	remoteApply := len(hosts) > 0
-	switch {
-	case remoteApply && cmd != "apply":
-		fmt.Fprintln(stderr, "--host is only used with apply")
-		return 2
-	case *keepGoing && !remoteApply:
-		fmt.Fprintln(stderr, "--keep-going needs --host")
-		return 2
-	case *all && cmd != "status":
-		fmt.Fprintln(stderr, "--all is only used with status")
-		return 2
-	case *all && *instanceName != "":
-		fmt.Fprintln(stderr, "--all conflicts with --instance")
-		return 2
-	case *instanceName != "" && cmd != "" && cmd != "status" && cmd != "console" && cmd != "setup" && cmd != "apply":
-		fmt.Fprintln(stderr, "--instance is only used with status, console, setup and apply")
-		return 2
-	case *instanceName != "" && remoteApply:
-		fmt.Fprintln(stderr, "--instance cannot be combined with --host; set relay.instance in the config instead")
+	_, rolling := remote.ParseAction(sub)
+	remoteApply := cmd == "apply" && (len(hosts) > 0 || *inventory != "")
+	if msg := checkFlagUse(cmd, sub, flagUse{
+		hosts: len(hosts) > 0, inventory: *inventory != "", config: *cfgPath != "", parallel: *parallel,
+		only: *only != "", keepGoing: *keepGoing, remoteApply: remoteApply, rolling: rolling,
+		instance: *instanceName != "", all: *all,
+	}); msg != "" {
+		fmt.Fprintln(stderr, msg)
 		return 2
 	}
 	if *instanceName != "" {
@@ -229,10 +250,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		UpdateCheck: !*dryRun && os.Getenv("TOR_RELAY_SETUP_NO_UPDATE_CHECK") == "",
 		Instance:    *instanceName,
 	}
-	interactive := !*plain && tui.Interactive()
+	interactive := !*plain && isInteractive()
 
-	// A remote apply needs no local root: the remote side uses sudo.
-	localChange := cmd == "" || cmd == "setup" || (cmd == "apply" && !remoteApply) || cmd == "console" || cmd == "uninstall"
+	// A remote apply and the fleet commands need no local root: the remote
+	// side uses sudo.
+	localChange := cmd == "" || cmd == "setup" || (cmd == "apply" && !remoteApply) || cmd == "console" || cmd == "uninstall" || cmd == "tor"
 	if !*dryRun && os.Geteuid() != 0 && localChange {
 		fmt.Fprintln(stderr, "tor-relay-setup changes system configuration and must run as root.")
 		fmt.Fprintln(stderr, "Try: sudo tor-relay-setup   (or add --dry-run to look around without root)")
@@ -249,12 +271,30 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "setup":
 		err = setup(opt, *cfgPath, interactive, stdin, stdout)
 	case "apply":
+		if *inventory != "" {
+			var inv fleet.Inventory
+			if inv, err = loadInventory(*inventory, *only); err == nil {
+				err = applyRemote(remote.Options{Inventory: &inv, DryRun: *dryRun, KeepGoing: *keepGoing, Parallel: *parallel}, stdout)
+			}
+			break
+		}
 		if *cfgPath == "" {
-			fmt.Fprintln(stderr, "apply needs --config FILE")
+			fmt.Fprintln(stderr, "apply needs --config FILE (or --inventory FILE)")
 			return 2
 		}
 		if remoteApply {
-			err = applyRemote(remote.Options{ConfigPath: *cfgPath, Hosts: hosts, DryRun: *dryRun, KeepGoing: *keepGoing}, stdout)
+			opt := remote.Options{ConfigPath: *cfgPath, Hosts: hosts, DryRun: *dryRun, KeepGoing: *keepGoing, Parallel: *parallel}
+			if *only != "" {
+				var inv fleet.Inventory
+				if inv, err = fleet.FromHosts(*cfgPath, hosts); err == nil {
+					inv, err = inv.Only(splitList(*only))
+				}
+				if err != nil {
+					break
+				}
+				opt.Inventory = &inv
+			}
+			err = applyRemote(opt, stdout)
 			break
 		}
 		var s config.Setup
@@ -268,6 +308,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		err = console(opt, interactive, stdout)
 	case "status":
 		return statusCmd(h, opt.Onionoo, statusRequest{Format: outFormat, Instance: *instanceName, All: *all}, stdout)
+	case "fleet-probe":
+		return fleetProbe(h, stdout)
+	case "tor":
+		inst, _ := relay.Named(*instanceName) // validated above; "" is the default
+		err = torCmd(h, sub, torOptions{Yes: *yes, Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout, Instance: inst})
+	case "fleet":
+		return fleetCmd(fleetOptions{
+			Sub: sub, Inventory: *inventory, Only: *only, Format: outFormat, FormatSet: *format != "" || *asJSON,
+			Yes: *yes, DryRun: *dryRun, KeepGoing: *keepGoing, Interactive: interactive,
+			Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout, Err: stderr,
+			Onionoo: dir, Local: h, Version: buildVersion(),
+		})
 	case "uninstall":
 		err = uninstall(context.Background(), h, uninstallOptions{Yes: *yes, Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout})
 	case "self-update":
@@ -439,8 +491,72 @@ func statusCmd(h host.Host, dir onionoo.Client, req statusRequest, stdout io.Wri
 func applyRemote(opt remote.Options, stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	_, err := newFleet(stdout).Apply(ctx, opt)
+	f := newFleet(stdout)
+	defer f.Close()
+	_, err := f.Apply(ctx, opt)
 	return err
+}
+
+// flagUse is what checkFlagUse needs to know about the command line.
+type flagUse struct {
+	hosts, inventory, config, only, keepGoing bool
+	parallel                                  int
+	remoteApply, rolling                      bool
+	instance, all                             bool
+}
+
+// checkFlagUse rejects flags and subcommands that do not fit the command.
+func checkFlagUse(cmd, sub string, u flagUse) string {
+	switch {
+	case u.hosts && cmd != "apply":
+		return "--host is only used with apply"
+	case u.inventory && cmd != "apply" && cmd != "fleet":
+		return "--inventory is only used with apply and fleet"
+	case u.inventory && u.hosts:
+		return "use either --inventory or --host"
+	case u.inventory && u.config && cmd == "apply":
+		return "--config is not used with --inventory: the inventory names its base relay.toml"
+	case u.parallel != 0 && !u.remoteApply:
+		return "--parallel needs apply --inventory or --host"
+	case u.parallel < 0 || u.parallel > 64:
+		return "--parallel must be 1–64"
+	case u.only && !u.remoteApply && cmd != "fleet":
+		return "--only needs apply --inventory, apply --host, or fleet"
+	case u.keepGoing && !u.remoteApply && !u.rolling:
+		return "--keep-going needs --host, --inventory, or a rolling fleet action"
+	case cmd == "fleet" && sub != "" && sub != "status" && !u.rolling:
+		return fmt.Sprintf("unknown fleet command %q: use status, restart, reload, or update-tor", sub)
+	case cmd == "tor" && sub != "restart" && sub != "reload" && sub != "update":
+		return "tor needs restart, reload, or update"
+	case u.all && cmd != "status":
+		return "--all is only used with status"
+	case u.all && u.instance:
+		return "--all conflicts with --instance"
+	case u.instance && cmd != "" && cmd != "status" && cmd != "console" && cmd != "setup" && cmd != "apply" && cmd != "tor":
+		return "--instance is only used with status, console, setup, apply and tor"
+	case u.instance && u.remoteApply:
+		return "--instance cannot be combined with --host or --inventory; set relay.instance in the config instead"
+	}
+	return ""
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// loadInventory reads an inventory and applies --only.
+func loadInventory(path, only string) (fleet.Inventory, error) {
+	inv, err := fleet.Load(path)
+	if err != nil {
+		return fleet.Inventory{}, err
+	}
+	return inv.Only(splitList(only))
 }
 
 func selfUpdate(check, dryRun bool, stdout, stderr io.Writer) int {

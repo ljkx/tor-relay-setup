@@ -1,0 +1,32 @@
+# Example tor-relay-setup fleet inventory.
+#
+#   tor-relay-setup apply --inventory fleet.toml --dry-run      # validate, then show every change
+#   tor-relay-setup apply --inventory fleet.toml                # apply (family host first)
+#   tor-relay-setup apply --inventory fleet.toml --only relay2  # just one relay
+#   tor-relay-setup fleet --inventory fleet.toml                # dashboard
+#   tor-relay-setup fleet status --format prometheus            # one scrape for the whole fleet
+#   tor-relay-setup fleet restart --yes                         # rolling restart, one relay at a time
+#
+# Everything is checked locally before the first ssh connection: every
+# relay's merged config, unique nicknames, and no relay or ORPort listed
+# twice on one server.
+
+config = "relay.toml"     # base relay.toml, relative to this file
+parallel = 4              # servers applied at once after the family host (default 1)
+nickname = "Example{n}"   # optional: {n} = position below (1, 2, …), {host} = short hostname
+
+# Each [[host]] is one relay. address is an ssh destination: [user@]host or an
+# ~/.ssh/config alias. The user must be root or have passwordless sudo.
+
+[[host]]
+address = "root@relay1.example.org"     # nickname Example1
+
+[[host]]
+address = "admin@relay2.example.org"    # nickname Example2
+[host.relay]                            # any relay.toml table can be overridden (merged key by key)
+ipv6 = "2001:db8::2"
+
+[[host]]
+address = "relay3"                      # an ~/.ssh/config alias
+relay = { nickname = "ExampleSpecial", or_port = 443 }
+bandwidth = { monthly_quota = "20TB" }
