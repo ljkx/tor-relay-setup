@@ -343,6 +343,14 @@ func render(now time.Time, privacy bool) string {
 		}
 		w.metric("relay_signing_cert_expiry_timestamp_seconds", "gauge", "Signing certificate expiry.")
 		w.sample("relay_signing_cert_expiry_timestamp_seconds", l, expires)
+		// The relay whose certificate runs out keeps its master key offline;
+		// tor renews the others itself.
+		offline := 0.0
+		if r.expiry {
+			offline = 1
+		}
+		w.metric("relay_master_key_offline", "gauge", "Master key offline.")
+		w.sample("relay_master_key_offline", l, offline)
 		w.metric("relay_family_ids", "gauge", "FamilyIds in torrc.")
 		w.sample("relay_family_ids", l, 1)
 		w.metric("relay_family_keys_missing", "gauge", "FamilyIds without a secret key.")

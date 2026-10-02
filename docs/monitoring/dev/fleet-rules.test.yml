@@ -16,6 +16,8 @@ tests:
         values: "1 0x20"
       - series: 'tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="guard"}'
         values: "43200x80"
+      - series: 'tor_relay_fleet_relay_master_key_offline{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="guard"}'
+        values: "1x80"
       - series: 'up{job="tor-relay-fleet",instance="127.0.0.1:9850"}'
         values: "1x20"
     alert_rule_test:
@@ -68,3 +70,30 @@ tests:
             exp_annotations:
               summary: "A (a.example.net) lost the Guard flag"
               description: "The relay held Guard during the last day. Restarts reset Stable and Guard; lower measured bandwidth costs Fast and Guard."
+
+  # tor renews an online master key's certificate itself, a day before it
+  # expires: no warning days ahead, only an alert when renewal failed.
+  - interval: 1m
+    input_series:
+      - series: 'tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host="c.example.net",tor_instance="default",nickname="C",fingerprint="CC",role="middle"}'
+        values: "259200x80"
+      - series: 'tor_relay_fleet_relay_master_key_offline{host="c.example.net",tor_instance="default",nickname="C",fingerprint="CC",role="middle"}'
+        values: "0x80"
+      - series: 'tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host="d.example.net",tor_instance="default",nickname="D",fingerprint="DD",role="middle"}'
+        values: "21600x80"
+      - series: 'tor_relay_fleet_relay_master_key_offline{host="d.example.net",tor_instance="default",nickname="D",fingerprint="DD",role="middle"}'
+        values: "0x80"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: TorFleetSigningCertExpiring
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TorFleetSigningCertExpiringSoon
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TorFleetSigningCertNotRenewed
+        exp_alerts:
+          - exp_labels: {severity: critical, host: d.example.net, tor_instance: default, nickname: D, fingerprint: DD, role: middle}
+            exp_annotations:
+              summary: "tor did not renew the signing certificate of D (d.example.net); it expires in 5h 55m 0s"
+              description: "tor renews it a day before expiry when the master key is on disk. Check the key directory's ownership and free space, and: journalctl -u tor@default | grep -i 'signing'"

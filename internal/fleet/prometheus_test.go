@@ -53,6 +53,7 @@ func contractFleet(t *testing.T) *Model {
 	guard.Report.Relay.IPv6, guard.Report.Listener.IPv6, guard.Report.Reachability.IPv4 = true, true, true
 	guard.Sample = loadSample(1_000_000, 2_000_000, 0)
 	guard.Traffic = &Traffic{At: t0, Read: 1_000_000, Written: 2_000_000, Connections: 120}
+	guard.Report.Keys = &keys.State{MasterOnDisk: true, Identity: "g", CertExpires: t0.Add(3 * 24 * time.Hour)} // tor renews it
 
 	exit := relayProbe(DefaultInstance, "Exit1", fp("2"), "0.4.9.3", true, famA)
 	exit.Report.Relay.Exit = true
@@ -190,6 +191,8 @@ func TestPrometheusMatchesTheContract(t *testing.T) {
 
 	one("relay_accounting_used_bytes", map[string]string{"nickname": "Acct1"}, 1<<39)
 	one("relay_signing_cert_expiry_timestamp_seconds", map[string]string{"nickname": "Acct1"}, float64(t0.Add(5*24*time.Hour).Unix()))
+	one("relay_master_key_offline", map[string]string{"nickname": "Acct1"}, 1)
+	one("relay_master_key_offline", map[string]string{"nickname": "Guard1"}, 0)
 	none("relay_accounting_max_bytes", map[string]string{"nickname": "Guard1"})
 
 	over := map[string]string{"nickname": "Over1", "role": "middle"}

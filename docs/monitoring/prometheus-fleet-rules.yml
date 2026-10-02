@@ -236,7 +236,8 @@ groups:
   - name: tor-relay-fleet-keys
     rules:
       - alert: TorFleetSigningCertExpiring
-        expr: tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 7 * 86400
+        # Only relays whose master key is offline: tor renews the others itself.
+        expr: (tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 7 * 86400) and on (host, tor_instance) tor_relay_fleet_relay_master_key_offline == 1
         for: 1h
         labels:
           severity: warning
@@ -245,12 +246,22 @@ groups:
           description: "With an offline master key, renew it: tor-relay-setup keys renew. tor stops working as a relay when it expires."
 
       - alert: TorFleetSigningCertExpiringSoon
-        expr: tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 86400
+        expr: (tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 86400) and on (host, tor_instance) tor_relay_fleet_relay_master_key_offline == 1
         labels:
           severity: critical
         annotations:
           summary: "The signing certificate of {{ $labels.nickname }} ({{ $labels.host }}) expires in {{ $value | humanizeDuration }}"
           description: "Renew it now: tor-relay-setup keys renew."
+
+      # tor renews an online master key's certificate a day before it
+      # expires; still expiring half a day later means it could not.
+      - alert: TorFleetSigningCertNotRenewed
+        expr: (tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 12 * 3600) and on (host, tor_instance) tor_relay_fleet_relay_master_key_offline == 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "tor did not renew the signing certificate of {{ $labels.nickname }} ({{ $labels.host }}); it expires in {{ $value | humanizeDuration }}"
+          description: "tor renews it a day before expiry when the master key is on disk. Check the key directory's ownership and free space, and: journalctl -u tor@{{ $labels.tor_instance }} | grep -i 'signing'"
 
       - alert: TorFleetFamilyKeyMissing
         expr: tor_relay_fleet_relay_family_keys_missing > 0

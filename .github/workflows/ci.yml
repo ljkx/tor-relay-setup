@@ -54,6 +54,10 @@ jobs:
         run: go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Known vulnerabilities
         run: make vuln
+      - name: Prometheus rule unit tests (promtool)
+        run: |
+          docker run --rm -v "$PWD/docs/monitoring:/m:ro" --entrypoint promtool prom/prometheus:v3.5.0 \
+            test rules /m/dev/fleet-rules.test.yml
 
   build:
     name: Build ${{ matrix.goarch }}

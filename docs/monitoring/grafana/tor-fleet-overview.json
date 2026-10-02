@@ -5186,7 +5186,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "description": "The ed25519 signing certificate that expires first (relays with an offline master key need a renewal before that).",
+          "description": "The signing certificate that expires first among relays with an offline master key, which need tor-relay-setup keys renew before then. tor renews the others itself a day before they expire, so \"none needed\" means nothing to do.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -5227,7 +5227,7 @@
                   "type": "range"
                 }
               ],
-              "noValue": "unknown",
+              "noValue": "none needed",
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
@@ -5272,7 +5272,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "max without (instance, job) (min(tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host=~\"$host\", role=~\"$role\"}) - time())",
+              "expr": "max without (instance, job) (min(tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host=~\"$host\", role=~\"$role\"} and on (host, tor_instance) tor_relay_fleet_relay_master_key_offline{host=~\"$host\", role=~\"$role\"} == 1) - time())",
               "format": "time_series",
               "instant": false,
               "legendFormat": "expires in",
@@ -5280,7 +5280,7 @@
               "refId": "A"
             }
           ],
-          "title": "Next cert expiry",
+          "title": "Renewal due",
           "type": "stat"
         },
         {

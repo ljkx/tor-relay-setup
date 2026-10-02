@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## v3.3.3 - 2026-10-02
+
+### Fixed
+
+- **False "signing certificate expires" alerts:**
+  - The problem: `TorFleetSigningCertExpiring` fired for every relay in the last week of its 30-day signing certificate. That includes relays whose master key is on disk, where tor renews the certificate itself a day before it expires, and where there is nothing to do.
+  - The fix: a new metric, `relay_master_key_offline`, is 1 only when tor cannot renew (offline master key). The warning and critical rules now apply only to those relays.
+  - A new critical rule, `TorFleetSigningCertNotRenewed`, catches the real failure on the others: a certificate still 12 hours from expiry, when tor should have renewed it.
+  - The overview's "Next cert expiry" became **"Renewal due"**: the first expiry among offline-key relays, or "none needed".
+- CI runs the promtool unit tests for the fleet rules.
+
 ## v3.3.2 - 2026-10-02
 
 ### Fixed
