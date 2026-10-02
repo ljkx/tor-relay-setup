@@ -235,6 +235,14 @@ jobs:
           probe 'id; touch /tmp/pwned' > forced.json
           jq -e '.relays | length == 2' forced.json
           test ! -e /tmp/pwned
+          # Ubuntu 26.04 uses sudo-rs, which rejects some classic sudo
+          # settings: its visudo must accept the rule too.
+          sudo cat /etc/sudoers.d/tor-relay-setup-probe > "$RUNNER_TEMP/probe.sudoers"
+          docker run --rm -v "$RUNNER_TEMP/probe.sudoers:/in:ro" ubuntu:resolute sh -ec '
+            apt-get -qq update
+            DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --no-install-recommends sudo-rs > /dev/null
+            install -m 0440 /in /tmp/probe
+            visudo-rs -c -f /tmp/probe'
           # The probe user cannot run anything else as root.
           ! sudo -u tor-relay-probe sudo -n /usr/local/bin/tor-relay-setup status 2> /dev/null
           ! sudo -u tor-relay-probe sudo -n /bin/sh -c id 2> /dev/null

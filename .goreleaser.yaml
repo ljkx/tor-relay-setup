@@ -54,8 +54,9 @@ checksum:
 sboms:
   - artifacts: archive
 
-changelog:
-  disable: true # notes come from CHANGELOG.md
+# No changelog section: the release workflow passes CHANGELOG.md's section with
+# --release-notes. (changelog.disable would skip that file too and publish an
+# empty body.)
 
 release:
   prerelease: auto

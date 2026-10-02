@@ -19,6 +19,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/monitor"
 	"github.com/ljkx/tor-relay-setup/internal/plan"
+	"github.com/ljkx/tor-relay-setup/internal/status"
 	"github.com/ljkx/tor-relay-setup/internal/system"
 )
 
@@ -356,20 +357,28 @@ func fleetAuthorizeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	if *remove || *dryRun {
 		return 0
 	}
-	hostName := o.Name
+	// Without --name, the known_hosts line names the relay by its hostname
+	// and its public IPv4 (comma-separated), so it matches an inventory that
+	// lists either; the check uses the address, which needs no DNS.
+	hostName, checkName := o.Name, o.Name
 	if hostName == "" {
 		if data, err := h.ReadFile("/etc/hostname"); err == nil {
 			hostName = strings.TrimSpace(string(data))
+		}
+		checkName = hostName
+		if ip := status.PublicIPv4(ctx, h); ip != "" {
+			hostName = strings.TrimPrefix(hostName+","+ip, ",")
+			checkName = ip
 		}
 	}
 	fmt.Fprintln(stdout, "\nThis relay accepts the monitoring key for user "+monitor.ProbeUser+"; it can only run:")
 	fmt.Fprintln(stdout, "  "+monitor.ProbeCommand(o.Binary))
 	if line := monitor.KnownHostsLine(h, hostName); line != "" {
-		fmt.Fprintln(stdout, "\nOn the monitoring server, add this relay's host key (use the name or address the inventory uses):")
+		fmt.Fprintln(stdout, "\nOn the monitoring server, add this relay's host key (it names the relay as the inventory may: hostname and address):")
 		fmt.Fprintln(stdout, "  echo '"+line+"' | sudo tee -a "+monitor.MonitorHome+"/.ssh/known_hosts")
 	}
 	fmt.Fprintln(stdout, "\nThen check from the monitoring server:")
-	fmt.Fprintln(stdout, "  sudo -u "+monitor.MonitorUser+" ssh "+orPlaceholder(hostName)+" | head -c 200")
+	fmt.Fprintln(stdout, "  sudo -u "+monitor.MonitorUser+" ssh "+orPlaceholder(checkName)+" | head -c 200")
 	return 0
 }
 

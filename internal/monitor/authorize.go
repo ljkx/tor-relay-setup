@@ -140,12 +140,14 @@ func AuthorizedKeysFile(o AuthorizeOptions) []byte {
 // SudoersFile lets ProbeUser run exactly `BINARY fleet-probe` as root: a
 // sudoers command with arguments matches only those arguments, so no other
 // subcommand, flag or program is allowed, and env_reset drops the caller's
-// environment (no TOR_RELAY_SETUP_* overrides).
+// environment (no TOR_RELAY_SETUP_* overrides). Only Defaults that both
+// sudo and sudo-rs (Ubuntu 26.04's default) accept: sudo-rs rejects
+// requiretty, which no supported distribution turns on anyway.
 func SudoersFile(binary string) []byte {
 	return []byte(`# Written by tor-relay-setup fleet authorize; remove with: tor-relay-setup fleet authorize --remove
 # The monitoring server logs in as ` + ProbeUser + ` with a forced-command key and
 # may run this one read-only probe as root, nothing else.
-Defaults:` + ProbeUser + ` !requiretty, !lecture, env_reset
+Defaults:` + ProbeUser + ` !lecture, env_reset
 ` + ProbeUser + ` ALL=(root) NOPASSWD: ` + binary + ` fleet-probe
 `)
 }

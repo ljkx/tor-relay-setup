@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## v3.3.2 - 2026-10-02
+
+### Fixed
+
+- **`fleet authorize` on Ubuntu 26.04:**
+  - The problem: Ubuntu 26.04 uses sudo-rs, which rejects `!requiretty`, so authorize stopped at its sudoers rule. visudo caught this before the file was installed, so sudo kept working.
+  - The fix: the rule now uses only settings that both sudo and sudo-rs accept. CI checks it with sudo-rs's visudo.
+- **The known_hosts line `fleet authorize` prints** names the relay by its hostname and its public IPv4, so it matches an inventory that lists either. The check command uses the address, which needs no DNS.
+- **Release notes:** GitHub releases since v3.1.0 were published with an empty body, because `changelog.disable` made GoReleaser skip the `--release-notes` file. The earlier releases' notes were filled in from this file.
+
 ## v3.3.1 - 2026-10-02
 
 ### Added
