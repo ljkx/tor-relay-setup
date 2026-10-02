@@ -26,8 +26,13 @@ type review struct {
 }
 
 func newReview(a *App, s config.Setup, back *wizard) *review {
+	// The MetricsPort address this host gets (another relay instance may
+	// already use 9035); preflight picks the same one.
+	s.Relay.MetricsAddress = plan.ResolveMetricsAddress(a.opt.Host, s)
 	r := &review{setup: s, back: back, vp: viewport.New()}
 	if err := s.Validate(); err != nil {
+		r.problem = err.Error()
+	} else if err := plan.Conflicts(s, plan.OtherInstances(a.opt.Host, s.Instance())); err != nil {
 		r.problem = err.Error()
 	}
 	r.resize(a)
@@ -69,13 +74,17 @@ func (r *review) render(a *App) string {
 	case "import":
 		fam = "import " + s.Family.ImportKey
 	}
-	relayRows := [][2]string{
+	var relayRows [][2]string
+	if inst := s.Instance(); !inst.IsDefault() {
+		relayRows = append(relayRows, [2]string{"Instance", inst.Name + " · " + inst.Unit})
+	}
+	relayRows = append(relayRows, [][2]string{
 		{"Mode", mode},
 		{"Nickname", s.Relay.Nickname},
 		{"ContactInfo", truncate(s.Relay.Contact, col-18)},
 		{"ORPort", itoa(s.Relay.ORPort) + " (IPv4) · IPv6 " + ipv6},
 		{"Family", fam},
-	}
+	}...)
 
 	bw, _ := s.Bandwidth.Resolve()
 	bwText, capText := "no limit", "none"
@@ -100,10 +109,13 @@ func (r *review) render(a *App) string {
 		{"Monthly cap", capText},
 		{"Updates", yesNo(s.System.UnattendedUpgrades) + " (security + Tor Project)"},
 		{"Firewall", s.System.Firewall},
-		{"MetricsPort", map[bool]string{true: config.DefaultMetricsPort + " (local only)", false: "off"}[s.Relay.MetricsPort]},
+		{"MetricsPort", map[bool]string{true: s.RelayConfig(nil).MetricsPort + " (local only)", false: "off"}[s.Relay.MetricsPort]},
 		{"Sandbox", yesNo(s.Relay.Sandbox)},
 		{"Nyx", yesNo(s.System.Nyx)},
 		{"Hostname", host},
+	}
+	if s.System.Tuning {
+		sysRows = append(sysRows, [2]string{"Tuning", "kernel limits for a fast relay"})
 	}
 
 	steps := plan.Build(s, a.checks.Facts)
@@ -142,7 +154,7 @@ func (r *review) render(a *App) string {
 	}
 	parts = append(parts,
 		panel(t, fmt.Sprintf("What will change (%d)", len(plan.Changes(steps))), changes.String(), w, false),
-		panel(t, "/etc/tor/torrc", torrc, w, false),
+		panel(t, s.Instance().TorrcPath, torrc, w, false),
 	)
 	return strings.Join(parts, "\n")
 }

@@ -39,6 +39,13 @@ type Relay struct {
 	IPv6        string `toml:"ipv6"` // global address, or empty for none
 	Sandbox     bool   `toml:"sandbox"`
 	MetricsPort bool   `toml:"metrics_port"`
+	// Instance names the Debian tor instance (tor-instance-create NAME,
+	// unit tor@NAME); empty or "default" is /etc/tor/torrc (tor@default).
+	Instance string `toml:"instance"`
+	// MetricsAddress is the MetricsPort address picked for this host when
+	// MetricsPort is on (plan.ResolveMetricsAddress); empty means
+	// DefaultMetricsPort. It is never saved: every host picks a free port.
+	MetricsAddress string `toml:"-"`
 }
 
 // Exit holds exit-relay settings; ignored for guard relays.
@@ -85,6 +92,9 @@ type System struct {
 	Nyx                bool   `toml:"nyx"`
 	Firewall           string `toml:"firewall"` // auto | none
 	EnableUFW          bool   `toml:"enable_ufw"`
+	// Tuning applies conservative kernel and service limits for
+	// high-bandwidth relays (see plan's tuning step).
+	Tuning bool `toml:"tuning"`
 }
 
 // Default returns the recommended answers for a new guard relay.
@@ -135,6 +145,16 @@ func (s Setup) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Instance returns the tor instance this setup configures. An invalid name
+// yields the default instance; Validate reports it.
+func (s Setup) Instance() relay.Instance {
+	inst, err := relay.Named(s.Relay.Instance)
+	if err != nil {
+		return relay.DefaultInstance()
+	}
+	return inst
+}
+
 // IsExit reports whether this is an exit relay.
 func (s Setup) IsExit() bool { return s.Relay.Mode == string(relay.ModeExit) }
 
@@ -160,6 +180,9 @@ func (s Setup) Validate() error {
 	}
 	if r.IPv6 != "" && !relay.ValidIPv6(r.IPv6) {
 		add("relay.ipv6: %q is not a global IPv6 address", r.IPv6)
+	}
+	if _, err := relay.Named(r.Instance); err != nil {
+		add("relay.instance: empty or \"default\" for /etc/tor/torrc, otherwise 1–27 letters or digits (tor-instance-create NAME)")
 	}
 
 	if s.IsExit() {
@@ -301,6 +324,9 @@ func (s Setup) RelayConfig(familyIDs []string) relay.Config {
 	}
 	if s.Relay.MetricsPort {
 		c.MetricsPort = DefaultMetricsPort
+		if s.Relay.MetricsAddress != "" {
+			c.MetricsPort = s.Relay.MetricsAddress
+		}
 	}
 	return c
 }

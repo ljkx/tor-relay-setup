@@ -29,6 +29,9 @@ type Options struct {
 	Onionoo onionoo.Client
 	// UpdateCheck shows a header hint when a newer release exists.
 	UpdateCheck bool
+	// Instance preselects a tor instance in the console ("" = the default,
+	// or the first relay found).
+	Instance string
 }
 
 // stateDir holds the cached update check (and the setup state).

@@ -14,6 +14,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/family"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
+	"github.com/ljkx/tor-relay-setup/internal/relay"
 )
 
 var (
@@ -531,5 +532,47 @@ func TestDirectoryWithoutFingerprint(t *testing.T) {
 	r, err := Directory(context.Background(), onionoo.Client{}, "")
 	if r != nil || err != nil {
 		t.Errorf("Directory(\"\") = %v, %v; want nil, nil without a network call", r, err)
+	}
+}
+
+func TestCollectNamedInstance(t *testing.T) {
+	t.Parallel()
+	fx := goodFixture()
+	moves := map[string]string{
+		"/etc/tor/torrc":                          "/etc/tor/instances/relay2/torrc",
+		"/var/lib/tor/fingerprint":                "/var/lib/tor-instances/relay2/fingerprint",
+		"/var/lib/tor/keys/fam.secret_family_key": "/var/lib/tor-instances/relay2/keys/fam.secret_family_key",
+		"/var/lib/tor/keys/fam.public_family_id":  "/var/lib/tor-instances/relay2/keys/fam.public_family_id",
+	}
+	for from, to := range moves {
+		fx.files[to] = fx.files[from]
+		delete(fx.files, from)
+	}
+	f := fx.fake()
+	inst, _ := relay.Named("relay2")
+	r := collect(t, f, Options{Instance: inst})
+	if r.Instance != "relay2" || r.Service.Unit != "tor@relay2" || !r.Relay.Configured {
+		t.Fatalf("report = instance %q unit %q configured %v", r.Instance, r.Service.Unit, r.Relay.Configured)
+	}
+	if r.Relay.Fingerprint != strings.ToUpper(fingerprint) {
+		t.Errorf("fingerprint %q not read from the instance DataDirectory", r.Relay.Fingerprint)
+	}
+	if r.Family.KeyDirectory != "/var/lib/tor-instances/relay2/keys" || len(r.Family.MissingKeys) != 0 {
+		t.Errorf("family = %+v", r.Family)
+	}
+	if !f.Ran("journalctl", "-u", "tor@relay2") || !f.Ran("systemctl", "is-active", "--quiet", "tor@relay2") {
+		t.Errorf("commands = %q", f.CommandLines())
+	}
+	if !r.Healthy() {
+		t.Errorf("warnings = %q", r.Warnings)
+	}
+
+	data, _ := json.Marshal(r)
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil || m["instance"] != "relay2" {
+		t.Errorf("JSON instance = %v (%v): %s", m["instance"], err, data)
+	}
+	if def := collect(t, goodFixture().fake(), Options{}); def.Instance != "default" {
+		t.Errorf("default report instance = %q", def.Instance)
 	}
 }

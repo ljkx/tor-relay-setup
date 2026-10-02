@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/family"
+	"github.com/ljkx/tor-relay-setup/internal/plan"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 )
 
@@ -59,10 +61,18 @@ type answers struct {
 	Sandbox    bool
 	Firewall   string
 	EnableUFW  bool
+	Tuning     bool
+
+	// Instance is the tor instance being configured ("" = default);
+	// NewInstance asks for its name (adding another relay to the server).
+	Instance    string
+	NewInstance bool
 }
 
 func answersFrom(s config.Setup) *answers {
 	a := &answers{
+		Instance:       s.Relay.Instance,
+		Tuning:         s.System.Tuning,
 		Mode:           s.Relay.Mode,
 		Nickname:       s.Relay.Nickname,
 		ContactFormat:  "ciiss",
@@ -137,6 +147,7 @@ func (a *answers) setup() config.Setup {
 		IPv6:        a.ipv6(),
 		Sandbox:     a.Sandbox,
 		MetricsPort: a.Metrics,
+		Instance:    strings.TrimSpace(a.Instance),
 	}
 	s.Exit = config.Exit{
 		ProviderPermission: a.ExitPermission,
@@ -166,6 +177,7 @@ func (a *answers) setup() config.Setup {
 		Nyx:                a.Nyx,
 		Firewall:           a.Firewall,
 		EnableUFW:          a.EnableUFW,
+		Tuning:             a.Tuning && plan.SuggestTuning(s),
 	}
 	return s
 }
@@ -213,15 +225,36 @@ type wizard struct {
 	ans  *answers
 	form *huh.Form
 	last int // last known step, for fields without a key
+	// metrics is the MetricsPort address this host would use (9035 for
+	// the default instance, the next free port for another relay).
+	metrics string
 }
 
 func newWizard(a *App, prefill config.Setup) *wizard {
-	w := &wizard{ans: answersFrom(prefill)}
+	return newWizardFor(a, answersFrom(prefill))
+}
+
+// newInstanceWizard sets up another relay on this server: the wizard also
+// asks for the new instance's name.
+func newInstanceWizard(a *App, prefill config.Setup) *wizard {
+	ans := answersFrom(prefill)
+	ans.NewInstance = true
+	return newWizardFor(a, ans)
+}
+
+func newWizardFor(a *App, ans *answers) *wizard {
+	w := &wizard{ans: ans}
+	withMetrics := ans.setup()
+	withMetrics.Relay.MetricsPort = true
+	w.metrics = plan.ResolveMetricsAddress(a.opt.Host, withMetrics)
 	if a.checks.FactsReady {
 		w.form = w.build(a)
 	}
 	return w
 }
+
+// instance is the tor instance the answers configure.
+func (w *wizard) instance() relay.Instance { return w.ans.setup().Instance() }
 
 // Step labels shown in the stepper, keyed by field-key prefix.
 var wizardSteps = []struct{ prefix, label string }{
@@ -301,23 +334,41 @@ func (w *wizard) build(app *App) *huh.Form {
 		}
 	}
 
+	// Adding another relay to the server first asks for its instance name.
+	var relayFields []huh.Field
+	if a.NewInstance {
+		relayFields = append(relayFields, huh.NewInput().Key("relay.instance").Title("Name of the new relay instance").
+			Description("Debian runs each extra relay as its own tor instance: tor-instance-create NAME, unit tor@NAME. Letters and digits only.").
+			Value(&a.Instance).CharLimit(27).Validate(func(s string) error {
+			s = strings.TrimSpace(s)
+			if !relay.ValidInstanceName(s) {
+				return errors.New("1–27 letters or digits, not \"default\"")
+			}
+			if found, _ := relay.Discover(app.opt.Host); slices.ContainsFunc(found, func(i relay.Instance) bool { return i.Name == s }) {
+				return errors.New("a relay with this name already runs here; pick another name")
+			}
+			return nil
+		}))
+	}
+	relayFields = append(relayFields,
+		huh.NewSelect[string]().Key("relay.mode").Title("What kind of relay?").
+			Options(
+				huh.NewOption("Guard / middle relay — forwards traffic inside Tor (recommended)", string(relay.ModeGuard)),
+				huh.NewOption("Exit relay — connects Tor users to the Internet (needs provider permission)", string(relay.ModeExit)),
+			).Value(&a.Mode),
+		huh.NewInput().Key("relay.nickname").Title("Relay nickname").
+			Description("Public. 1–19 letters or digits; it doesn't have to be unique.").
+			Placeholder("MyRelay").Value(&a.Nickname).CharLimit(19).
+			Validate(func(s string) error {
+				if !relay.ValidNickname(strings.TrimSpace(s)) {
+					return errors.New("use 1–19 letters or digits")
+				}
+				return nil
+			}),
+	)
+
 	f := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().Key("relay.mode").Title("What kind of relay?").
-				Options(
-					huh.NewOption("Guard / middle relay — forwards traffic inside Tor (recommended)", string(relay.ModeGuard)),
-					huh.NewOption("Exit relay — connects Tor users to the Internet (needs provider permission)", string(relay.ModeExit)),
-				).Value(&a.Mode),
-			huh.NewInput().Key("relay.nickname").Title("Relay nickname").
-				Description("Public. 1–19 letters or digits; it doesn't have to be unique.").
-				Placeholder("MyRelay").Value(&a.Nickname).CharLimit(19).
-				Validate(func(s string) error {
-					if !relay.ValidNickname(strings.TrimSpace(s)) {
-						return errors.New("use 1–19 letters or digits")
-					}
-					return nil
-				}),
-		),
+		huh.NewGroup(relayFields...),
 
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("contact.format").Title("ContactInfo").
@@ -368,6 +419,12 @@ func (w *wizard) build(app *App) *huh.Form {
 				Value(&a.ORPort).Validate(func(s string) error {
 				if !relay.ValidPort(atoi(s)) {
 					return errors.New("a TCP port from 1 to 65535")
+				}
+				// Another relay instance on this server may hold it.
+				for _, o := range plan.OtherInstances(app.opt.Host, a.setup().Instance()) {
+					if slices.Contains(o.Doc.ORPortNumbers(), atoi(s)) {
+						return fmt.Errorf("tor instance %s already uses port %d; every relay needs its own", o.Name, atoi(s))
+					}
 				}
 				return nil
 			}),
@@ -424,11 +481,16 @@ func (w *wizard) build(app *App) *huh.Form {
 					if !relay.ValidFamilyKeyName(s) {
 						return errors.New("letters, digits, '.', '_' or '-' (max 64)")
 					}
-					// Existing keys are never overwritten, so say so now
-					// rather than failing halfway through the apply.
-					path := family.KeyDirectory("", "", "/var/lib/tor") + "/" + s + ".secret_family_key"
-					if _, err := app.opt.Host.Stat(path); err == nil {
-						return errors.New("a key with this name already exists on this server; choose another name, or import it instead")
+					// Existing keys are never overwritten, and all relays on
+					// a server share one family: say so now rather than
+					// failing halfway through the apply.
+					check := a.setup()
+					check.Family.KeyName = s
+					if err := plan.CheckFamily(app.opt.Host, check); err != nil {
+						if strings.Contains(err.Error(), "already exists") {
+							return errors.New("a key with this name already exists on this server; choose another name, or import it instead")
+						}
+						return err
 					}
 					return nil
 				}),
@@ -527,9 +589,14 @@ func (w *wizard) build(app *App) *huh.Form {
 			newConfirm().Key("system.unattended").Title("Install security and Tor updates automatically?").
 				Description("Strongly recommended for relays.").Value(&a.Unattended),
 			newConfirm().Key("system.nyx").Title("Install Nyx, the terminal relay monitor?").Value(&a.Nyx),
-			newConfirm().Key("system.metrics").Title("Enable MetricsPort on 127.0.0.1:9035?").
+			newConfirm().Key("system.metrics").Title("Enable MetricsPort on "+w.metrics+"?").
 				Description("Local-only Prometheus metrics (overload, DNS errors). Never exposed publicly.").Value(&a.Metrics),
 		),
+		huh.NewGroup(
+			newConfirm().Key("system.tuning").Title("Tune the kernel for a fast relay?").
+				Description("For relays above ~100 Mbit/s: a wider ephemeral port range and a larger conntrack table (sysctl), and the open-file limit checked. Conservative values from Tor's documentation; nothing security-related is touched.").
+				Value(&a.Tuning),
+		).WithHideFunc(func() bool { return !plan.SuggestTuning(a.setup()) }),
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("system.firewall").Title("Firewall").
 				Description(firewallDesc()).
@@ -606,11 +673,13 @@ func (w *wizard) view(a *App) string {
 	}
 	labels, cur := w.stepLabels(), w.currentStep()
 	top := stepper(t, a.contentWidth(), labels, cur)
-	left := panel(t, labels[cur], w.form.View(), fw, true)
+	left := panel(t, labels[cur]+instanceTitle(w.instance()), w.form.View(), fw, true)
 	if sw == 0 {
 		return top + "\n\n" + left
 	}
-	cfg := w.ans.setup().RelayConfig(nil)
+	s := w.ans.setup()
+	s.Relay.MetricsAddress = w.metrics
+	cfg := s.RelayConfig(nil)
 	preview := highlightTorrc(t, string(cfg.Render(program(a.opt.Version), time.Now())), sw-4)
 	// Skip the generated-by header comment; it adds nothing here.
 	preview = trimHeader(preview, 3)

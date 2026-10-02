@@ -21,8 +21,9 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/torproject"
 )
 
-// TorUser owns Tor's data and key directories on Debian and Ubuntu.
-const TorUser = "debian-tor"
+// TorUser owns the default instance's data and key directories on Debian
+// and Ubuntu; a named instance uses relay.Instance.User (_tor-NAME).
+const TorUser = relay.DefaultUser
 
 const resolvConf = "/etc/resolv.conf"
 
@@ -37,6 +38,12 @@ func Build(s config.Setup, f system.Facts) []Step {
 		updateStep(),
 		packagesStep(s, f),
 	)
+	if inst := s.Instance(); !inst.IsDefault() {
+		steps = append(steps, instanceStep(inst))
+	}
+	if s.System.Tuning {
+		steps = append(steps, tuningStep(s))
+	}
 	if s.Family.Mode == "generate" || s.Family.Mode == "import" {
 		steps = append(steps, familyStep(s))
 	}
@@ -46,7 +53,7 @@ func Build(s config.Setup, f system.Facts) []Step {
 	if s.System.UnattendedUpgrades {
 		steps = append(steps, unattendedStep(f))
 	}
-	steps = append(steps, torrcStep())
+	steps = append(steps, torrcStep(s))
 	if fw := firewallPlan(s, f); fw.enabled {
 		steps = append(steps, firewallStep(s, f, fw))
 	}
@@ -87,15 +94,29 @@ func preflightStep(s config.Setup, f system.Facts) Step {
 			if e.Facts.DiskFreeMiB > 0 && e.Facts.DiskFreeMiB < 512 {
 				return fmt.Errorf("only %d MiB free under /var; apt needs at least 512 MiB (check df -h)", e.Facts.DiskFreeMiB)
 			}
-			if s.Family.Mode == "generate" {
-				key := family.KeyDirectory("", "", "/var/lib/tor") + "/" + s.Family.KeyName + ".secret_family_key"
-				if _, err := e.Host.Stat(key); err == nil {
-					return fmt.Errorf("a family key named %q already exists (%s); choose another name or import it instead", s.Family.KeyName, key)
-				}
+			// Other relays on this server: ports, family and the per-IP limit.
+			others := OtherInstances(e.Host, e.instance())
+			e.Setup.Relay.MetricsAddress = ResolveMetricsAddress(e.Host, e.Setup)
+			if err := Conflicts(e.Setup, others); err != nil {
+				return err
 			}
-			need := system.RequiredRAMMiB(s.IsExit())
+			shared, err := sharedFamily(e.Host, e.Setup, others)
+			if err != nil {
+				return err
+			}
+			if err := checkOwnFamilyKey(e.Host, e.Setup, shared); err != nil {
+				return err
+			}
+			e.SharedFamily = shared
+			if w := RelaysPerIPv4Warning(len(others) + 1); w != "" {
+				r.Note(Warn, w)
+			}
+			if len(others) > 0 {
+				r.Note(Info, fmt.Sprintf("%d other relay instance(s) on this server; configuring %s", len(others), e.instance().Unit))
+			}
+			need := system.RequiredRAMMiB(s.IsExit()) * (len(others) + 1)
 			if e.Facts.MemTotalMiB > 0 && e.Facts.MemTotalMiB < need {
-				r.Note(Warn, fmt.Sprintf("%d MiB RAM is below Tor's recommended %d MiB for this relay type", e.Facts.MemTotalMiB, need))
+				r.Note(Warn, fmt.Sprintf("%d MiB RAM is below Tor's recommended %d MiB for %d relay(s) of this type", e.Facts.MemTotalMiB, need, len(others)+1))
 			}
 			r.Progress(50, "Checking the Tor Project repository for "+f.Codename)
 			ok, err := torproject.SuiteAvailable(ctx, e.HTTP, f.Codename)
@@ -268,11 +289,15 @@ func packagesStep(s config.Setup, f system.Facts) Step {
 }
 
 func familyStep(s config.Setup) Step {
+	inst := s.Instance()
 	title := "Create relay family key " + s.Family.KeyName
-	change := "Generate a family key with tor --keygen-family and install it for " + TorUser
+	change := "Generate a family key with tor --keygen-family and install it in " + inst.KeyDir + " for " + inst.User
+	if !inst.IsDefault() {
+		change += " (another relay on this server that already has the key shares it instead)"
+	}
 	if s.Family.Mode == "import" {
 		title = "Import relay family key"
-		change = "Install family key " + s.Family.ImportKey + " for " + TorUser
+		change = "Install family key " + s.Family.ImportKey + " in " + inst.KeyDir + " for " + inst.User
 	}
 	return Step{
 		ID:      "family",
@@ -280,7 +305,8 @@ func familyStep(s config.Setup) Step {
 		Changes: []string{change},
 		Weight:  2,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
-			dir := family.KeyDirectory("", "", "/var/lib/tor")
+			inst := e.instance()
+			dir := inst.KeyDir
 			var (
 				name   string
 				secret []byte
@@ -288,6 +314,16 @@ func familyStep(s config.Setup) Step {
 			)
 			switch e.Setup.Family.Mode {
 			case "generate":
+				if sh := e.SharedFamily; sh != nil {
+					// All relays on one server share one family key.
+					data, err := e.Host.ReadFile(sh.Key.Path)
+					if err != nil {
+						return fmt.Errorf("read family key of tor instance %s: %w", sh.Instance, err)
+					}
+					name, secret, id = sh.Key.Name, data, sh.Key.ID
+					r.Note(Info, "Sharing family key "+name+" of tor instance "+sh.Instance+": all relays on this server are one family")
+					break
+				}
 				name = e.Setup.Family.KeyName
 				work, err := os.MkdirTemp("", "tor-family-")
 				if err != nil {
@@ -317,7 +353,7 @@ func familyStep(s config.Setup) Step {
 					return errors.New("no FamilyId: copy NAME.public_family_id next to the key, or set family.family_id")
 				}
 			}
-			if err := family.Install(e.Host, dir, name, secret, id, TorUser); err != nil {
+			if err := family.Install(e.Host, dir, name, secret, id, inst.User); err != nil {
 				return err
 			}
 			e.FamilyID = id
@@ -407,16 +443,20 @@ func unattendedStep(f system.Facts) Step {
 	}
 }
 
-func torrcStep() Step {
+func torrcStep(s config.Setup) Step {
 	return Step{
 		ID:      "torrc",
 		Title:   "Write and verify torrc",
-		Changes: []string{"Back up and replace /etc/tor/torrc after tor --verify-config accepts the new version"},
+		Changes: []string{"Back up and replace " + s.Instance().TorrcPath + " after tor --verify-config accepts the new version"},
 		Weight:  3,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
 			var ids []string
 			if e.FamilyID != "" {
 				ids = []string{e.FamilyID}
+			}
+			inst := e.instance()
+			if e.Setup.Relay.MetricsPort && e.Setup.Relay.MetricsAddress == "" {
+				e.Setup.Relay.MetricsAddress = ResolveMetricsAddress(e.Host, e.Setup)
 			}
 			cfg := e.Setup.RelayConfig(ids)
 			if err := cfg.Validate(); err != nil {
@@ -437,15 +477,19 @@ func torrcStep() Step {
 				return err
 			}
 			r.Progress(40, "tor --verify-config")
-			switch err := relay.Verify(ctx, e.Host, candidate.Name()); {
+			_, statErr := e.Host.Stat(inst.TorrcPath)
+			switch err := relay.VerifyInstance(ctx, e.Host, inst, candidate.Name()); {
 			case errors.Is(err, relay.ErrTorMissing) && e.Host.DryRun():
 				r.Note(Info, "tor --verify-config runs once tor is installed")
+			case err != nil && e.Host.DryRun() && !inst.IsDefault() && statErr != nil:
+				// tor rejects the defaults' User _tor-NAME until it exists.
+				r.Note(Info, "tor --verify-config runs once "+relay.InstanceCreateCommand+" has created instance "+inst.Name)
 			case err != nil:
 				return fmt.Errorf("tor rejected the generated torrc: %w", err)
 			default:
 				r.Note(Success, "tor --verify-config accepted the new torrc")
 			}
-			ch, err := e.Host.WriteFile(e.TorrcPath, data, host.FileOptions{Mode: 0o644, Backup: true})
+			ch, err := e.Host.WriteFile(inst.TorrcPath, data, host.FileOptions{Mode: 0o644, Backup: true})
 			if err != nil {
 				return err
 			}
@@ -507,10 +551,11 @@ func serviceStep(s config.Setup) Step {
 	return Step{
 		ID:      "service",
 		Title:   "Start Tor",
-		Changes: []string{"Enable and restart " + service.DefaultUnit},
+		Changes: []string{"Enable and restart " + s.Instance().Unit},
 		Weight:  6,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
-			tor := service.Tor{Host: e.Host, Unit: service.DefaultUnit}
+			unit := e.instance().Unit
+			tor := service.Tor{Host: e.Host, Unit: unit}
 			if err := tor.Enable(ctx); err != nil {
 				return err
 			}
@@ -521,9 +566,9 @@ func serviceStep(s config.Setup) Step {
 			if e.Host.DryRun() {
 				return nil
 			}
-			r.Progress(40, "Waiting for "+service.DefaultUnit)
+			r.Progress(40, "Waiting for "+unit)
 			if !waitFor(ctx, 15*time.Second, func() bool { return tor.Active(ctx) }) {
-				return errors.New(service.DefaultUnit + " is not active; check journalctl -u " + service.DefaultUnit + " -n 100")
+				return errors.New(unit + " is not active; check journalctl -u " + unit + " -n 100")
 			}
 			r.Progress(70, "Waiting for the ORPort listener")
 			if waitFor(ctx, 20*time.Second, func() bool {
@@ -567,6 +612,17 @@ type State struct {
 	AppliedAt   time.Time `json:"applied_at"`
 	NewPackages []string  `json:"new_packages,omitempty"`
 	FamilyID    string    `json:"family_id,omitempty"`
+	Instance    string    `json:"instance,omitempty"`
+}
+
+// StateFile is where stateStep records a run for inst: state.json for the
+// default instance, state-NAME.json for a named one, so applying a second
+// instance does not overwrite the first one's record.
+func StateFile(stateDir string, inst relay.Instance) string {
+	if inst.IsDefault() {
+		return filepath.Join(stateDir, "state.json")
+	}
+	return filepath.Join(stateDir, "state-"+inst.Name+".json")
 }
 
 func stateStep() Step {
@@ -583,11 +639,12 @@ func stateStep() Step {
 				AppliedAt:   e.Now().UTC(),
 				NewPackages: e.NewPackages,
 				FamilyID:    e.FamilyID,
+				Instance:    instanceLabel(e.instance()),
 			}, "", "  ")
 			if err != nil {
 				return err
 			}
-			_, err = e.Host.WriteFile(filepath.Join(e.StateDir, "state.json"), append(data, '\n'), host.FileOptions{Mode: 0o600})
+			_, err = e.Host.WriteFile(StateFile(e.StateDir, e.instance()), append(data, '\n'), host.FileOptions{Mode: 0o600})
 			return err
 		},
 	}

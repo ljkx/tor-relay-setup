@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -49,7 +50,8 @@ Usage:
   tor-relay-setup status [--json]           print relay health (exit code 1 when something needs attention)
   tor-relay-setup status --format text|json|prometheus
                                             prometheus: node_exporter metrics; always exits 0
-  tor-relay-setup uninstall [--yes]         remove this tool's state and logs, then offer to remove
+  tor-relay-setup status --all              every relay instance on this server (json: an array)
+  tor-relay-setup uninstall [--yes]        remove this tool's state and logs, then offer to remove
                                             the program itself (never Tor or its keys)
   tor-relay-setup self-update [--check]     install the newest release, verified like install.sh;
                                             --check only compares versions
@@ -65,6 +67,14 @@ Flags:
   --host DEST      apply on [user@]host over ssh; repeat for several relays
   --keep-going     apply --host: continue with the next host after a failure
   --check          self-update: only report whether a newer release exists
+  --instance NAME  the tor instance for status, console, setup and apply (overrides
+                   relay.instance); "default" is /etc/tor/torrc
+  --all            status: report every relay instance on this server
+
+Several relays on one server (Debian tor instances):
+  Each extra relay is a tor instance: tor-instance-create NAME, /etc/tor/instances/NAME/torrc,
+  unit tor@NAME. Set relay.instance = "NAME" in the config, or press n in the console.
+  The directory authorities accept at most 8 relays per IPv4 address.
 
 Remote apply (--host):
   Uses your ssh and scp, so ~/.ssh/config, keys and known_hosts apply. Each host gets this
@@ -125,6 +135,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.Var(&hosts, "host", "")
 	keepGoing := fs.Bool("keep-going", false, "")
 	check := fs.Bool("check", false, "")
+	instanceName := fs.String("instance", "", "")
+	all := fs.Bool("all", false, "")
 	help := fs.Bool("help", false, "")
 	fs.BoolVar(help, "h", false, "")
 	showVersion := fs.Bool("version", false, "")
@@ -165,6 +177,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case *keepGoing && !remoteApply:
 		fmt.Fprintln(stderr, "--keep-going needs --host")
 		return 2
+	case *all && cmd != "status":
+		fmt.Fprintln(stderr, "--all is only used with status")
+		return 2
+	case *all && *instanceName != "":
+		fmt.Fprintln(stderr, "--all conflicts with --instance")
+		return 2
+	case *instanceName != "" && cmd != "" && cmd != "status" && cmd != "console" && cmd != "setup" && cmd != "apply":
+		fmt.Fprintln(stderr, "--instance is only used with status, console, setup and apply")
+		return 2
+	case *instanceName != "" && remoteApply:
+		fmt.Fprintln(stderr, "--instance cannot be combined with --host; set relay.instance in the config instead")
+		return 2
+	}
+	if *instanceName != "" {
+		if _, err := relay.Named(*instanceName); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
 	}
 
 	local := host.NewLocal()
@@ -197,6 +227,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// The console's "update available" hint asks the GitHub API at most
 		// once a day; dry runs and TOR_RELAY_SETUP_NO_UPDATE_CHECK skip it.
 		UpdateCheck: !*dryRun && os.Getenv("TOR_RELAY_SETUP_NO_UPDATE_CHECK") == "",
+		Instance:    *instanceName,
 	}
 	interactive := !*plain && tui.Interactive()
 
@@ -228,12 +259,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		var s config.Setup
 		if s, err = config.Load(*cfgPath); err == nil {
+			if *instanceName != "" {
+				s.Relay.Instance = *instanceName
+			}
 			err = tui.RunApplyPlain(opt, s, system.Facts{}, *yes, stdin, stdout)
 		}
 	case "console":
 		err = console(opt, interactive, stdout)
 	case "status":
-		return statusCmd(h, opt.Onionoo, outFormat, stdout)
+		return statusCmd(h, opt.Onionoo, statusRequest{Format: outFormat, Instance: *instanceName, All: *all}, stdout)
 	case "uninstall":
 		err = uninstall(context.Background(), h, uninstallOptions{Yes: *yes, Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout})
 	case "self-update":
@@ -263,6 +297,16 @@ func setup(opt tui.Options, cfgPath string, interactive bool, stdin io.Reader, s
 		opt.Prefill = &s
 		opt.ConfigPath = cfgPath
 	}
+	if opt.Instance != "" {
+		// --instance: start from that instance's torrc (or sensible
+		// defaults for a new one) unless --config gave the answers.
+		s := tui.InstancePrefill(opt.Host, opt.Instance)
+		if opt.Prefill != nil {
+			s = *opt.Prefill
+			s.Relay.Instance = opt.Instance
+		}
+		opt.Prefill = &s
+	}
 	if interactive {
 		return tui.RunSetup(opt)
 	}
@@ -273,15 +317,68 @@ func console(opt tui.Options, interactive bool, stdout io.Writer) error {
 	if interactive {
 		return tui.RunConsole(opt)
 	}
-	if code := statusCmd(opt.Host, opt.Onionoo, "text", stdout); code != 0 {
+	req := statusRequest{Format: "text", Instance: opt.Instance, All: opt.Instance == ""}
+	if code := statusCmd(opt.Host, opt.Onionoo, req, stdout); code != 0 {
 		return errors.New("the relay needs attention")
 	}
 	return nil
 }
 
+// relayConfigured reports whether any tor instance on this host is a relay.
 func relayConfigured(h host.Host) bool {
-	data, err := h.ReadFile("/etc/tor/torrc")
-	return err == nil && len(relay.ParseDocument(data).ORPorts()) > 0
+	list, _ := relay.Discover(h)
+	return len(list) > 0
+}
+
+// statusRequest is what `status` was asked for.
+type statusRequest struct {
+	Format   string // text, json or prometheus
+	Instance string // --instance; "" picks the default (or only) relay
+	All      bool   // --all: every relay instance
+}
+
+// statusInstances resolves which instances a status request covers.
+// Without --instance or --all it is the default instance when it is a relay,
+// else the first relay instance found, else the default instance (which
+// then reports "not configured").
+func statusInstances(h host.Host, req statusRequest) []relay.Instance {
+	if req.Instance != "" {
+		inst, _ := relay.Named(req.Instance)
+		return []relay.Instance{inst}
+	}
+	found, _ := relay.Discover(h)
+	switch {
+	case len(found) == 0:
+		return []relay.Instance{relay.DefaultInstance()}
+	case req.All:
+		return found
+	}
+	if inst, ok := relay.Find(found, relay.DefaultInstanceName); ok {
+		return []relay.Instance{inst}
+	}
+	return found[:1]
+}
+
+// collectReports gathers one report per instance concurrently, each with
+// its Tor Metrics lookup.
+func collectReports(ctx context.Context, h host.Host, dir onionoo.Client, instances []relay.Instance) []status.Report {
+	reports := make([]status.Report, len(instances))
+	var wg sync.WaitGroup
+	for i, inst := range instances {
+		wg.Go(func() {
+			r := status.Collect(ctx, h, status.Options{Instance: inst})
+			if r.Relay.Fingerprint != "" {
+				d, err := status.Directory(ctx, dir, r.Relay.Fingerprint)
+				r.Directory = d
+				if err != nil {
+					r.DirectoryError = err.Error()
+				}
+			}
+			reports[i] = r
+		})
+	}
+	wg.Wait()
+	return reports
 }
 
 // statusFormat resolves --format and its --json shorthand.
@@ -299,35 +396,42 @@ func statusFormat(format string, asJSON bool) (string, error) {
 	return "", fmt.Errorf("unknown --format %q: use text, json, or prometheus", format)
 }
 
-// statusCmd prints the report. Text and JSON exit 1 when the relay needs
+// statusCmd prints the reports. Text and JSON exit 1 when any relay needs
 // attention; Prometheus output always exits 0 (the warnings gauge carries
 // it) so that `status --format prometheus > f.tmp && mv f.tmp f` works.
-func statusCmd(h host.Host, dir onionoo.Client, format string, stdout io.Writer) int {
+//
+// JSON is one Report object, or with --all an array of Reports (one per
+// relay instance, each naming its "instance"), even when there is only one.
+func statusCmd(h host.Host, dir onionoo.Client, req statusRequest, stdout io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	r := status.Collect(ctx, h, status.Options{})
-	if r.Relay.Fingerprint != "" {
-		d, err := status.Directory(ctx, dir, r.Relay.Fingerprint)
-		r.Directory = d
-		if err != nil {
-			r.DirectoryError = err.Error()
-		}
-	}
-	switch format {
+	reports := collectReports(ctx, h, dir, statusInstances(h, req))
+	switch req.Format {
 	case "prometheus":
-		if err := r.WritePrometheus(stdout); err != nil {
+		if err := status.WritePrometheusAll(stdout, reports); err != nil {
 			return 1
 		}
 		return 0
 	case "json":
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(r)
+		if req.All {
+			_ = enc.Encode(reports)
+		} else {
+			_ = enc.Encode(reports[0])
+		}
 	default:
-		printStatus(stdout, r)
+		for i, r := range reports {
+			if i > 0 {
+				fmt.Fprintln(stdout)
+			}
+			printStatus(stdout, r, len(reports) > 1)
+		}
 	}
-	if !r.Healthy() {
-		return 1
+	for _, r := range reports {
+		if !r.Healthy() {
+			return 1
+		}
 	}
 	return 0
 }
@@ -372,15 +476,22 @@ func selfUpdate(check, dryRun bool, stdout, stderr io.Writer) int {
 	return exitUpdateAvailable
 }
 
-func printStatus(w io.Writer, r status.Report) {
+// printStatus prints one report. The Instance line appears when several
+// instances are printed, or for a named instance; a single default relay
+// looks exactly as it always did.
+func printStatus(w io.Writer, r status.Report, several bool) {
 	mark := func(ok bool) string {
 		if ok {
 			return "✓"
 		}
 		return "✗"
 	}
+	inst, _ := relay.Named(r.Instance)
+	if several || !inst.IsDefault() {
+		fmt.Fprintf(w, "Instance     %s (%s)\n", inst.Name, inst.TorrcPath)
+	}
 	if !r.Relay.Configured {
-		fmt.Fprintln(w, "No relay is configured in /etc/tor/torrc. Run: sudo tor-relay-setup")
+		fmt.Fprintf(w, "No relay is configured in %s. Run: sudo tor-relay-setup\n", inst.TorrcPath)
 		return
 	}
 	fmt.Fprintf(w, "Relay        %s (%s)\n", r.Relay.Nickname, map[bool]string{true: "exit", false: "guard/middle"}[r.Relay.Exit])

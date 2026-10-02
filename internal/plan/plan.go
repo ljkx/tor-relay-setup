@@ -12,6 +12,7 @@ import (
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/system"
 )
 
@@ -38,34 +39,39 @@ type Reporter interface {
 
 // Env carries everything steps need, and collects what they produce.
 type Env struct {
-	Host      host.Host
-	Facts     system.Facts
-	Setup     config.Setup
-	HTTP      *http.Client
-	Program   string // shown in the generated torrc header
-	Now       func() time.Time
-	TorrcPath string
-	StateDir  string
+	Host    host.Host
+	Facts   system.Facts
+	Setup   config.Setup
+	HTTP    *http.Client
+	Program string // shown in the generated torrc header
+	Now     func() time.Time
+	// Instance is the tor instance being configured (Setup.Instance()).
+	Instance relay.Instance
+	StateDir string
 
 	// Filled in while running.
-	FamilyID    string
-	NewPackages []string
-	RestartedAt time.Time
+	FamilyID     string
+	NewPackages  []string
+	RestartedAt  time.Time
+	SharedFamily *SharedFamilyKey // a family key reused from another instance
 }
 
 // NewEnv returns an Env with production defaults.
 func NewEnv(h host.Host, facts system.Facts, s config.Setup, program string) *Env {
 	return &Env{
-		Host:      h,
-		Facts:     facts,
-		Setup:     s,
-		HTTP:      &http.Client{Timeout: 20 * time.Second},
-		Program:   program,
-		Now:       time.Now,
-		TorrcPath: "/etc/tor/torrc",
-		StateDir:  "/var/lib/tor-relay-setup",
+		Host:     h,
+		Facts:    facts,
+		Setup:    s,
+		HTTP:     &http.Client{Timeout: 20 * time.Second},
+		Program:  program,
+		Now:      time.Now,
+		Instance: s.Instance(),
+		StateDir: "/var/lib/tor-relay-setup",
 	}
 }
+
+// instance is the configured instance; an Env built by hand means default.
+func (e *Env) instance() relay.Instance { return e.Instance.OrDefault() }
 
 // Step is one unit of work shown as a line in the apply checklist.
 type Step struct {

@@ -108,7 +108,39 @@ func TestBuildStepOrder(t *testing.T) {
 			},
 			want:       []string{"preflight", "repository", "update", "packages", "family", "unattended", "torrc", "firewall", "service", "state"},
 			wantTitle:  map[string]string{"family": "Import relay family key"},
-			wantChange: []string{"Install family key /root/fam.secret_family_key for debian-tor"},
+			wantChange: []string{"Install family key /root/fam.secret_family_key in /var/lib/tor/keys for debian-tor"},
+		},
+		{
+			name: "named instance",
+			setup: func(s *config.Setup) {
+				s.Relay.Instance, s.Relay.ORPort = "relay2", 9002
+				s.Family.Mode, s.Family.KeyName = "generate", "myfam"
+			},
+			want:      []string{"preflight", "repository", "update", "packages", "instance", "family", "unattended", "torrc", "firewall", "service", "state"},
+			wantTitle: map[string]string{"instance": "Create tor instance relay2", "firewall": "Open ORPort 9002"},
+			wantChange: []string{
+				"tor-instance-create relay2 if it does not exist (user _tor-relay2, /etc/tor/instances/relay2/torrc, DataDirectory /var/lib/tor-instances/relay2, unit tor@relay2)",
+				"install it in /var/lib/tor-instances/relay2/keys for _tor-relay2",
+				"Back up and replace /etc/tor/instances/relay2/torrc",
+				"ufw allow 9002/tcp",
+				"Enable and restart tor@relay2",
+			},
+			noChange: []string{"tor@default", "/etc/tor/torrc", "ufw allow 9001"},
+		},
+		{
+			name:  "tuning",
+			setup: func(s *config.Setup) { s.System.Tuning = true },
+			want:  []string{"preflight", "repository", "update", "packages", "tuning", "unattended", "torrc", "firewall", "service", "state"},
+			wantChange: []string{
+				"Write /etc/sysctl.d/60-tor-relay.conf (ephemeral ports 15000-64000; nf_conntrack_max 262144 if conntrack is loaded)",
+				"Raise LimitNOFILE to 65536 with /etc/systemd/system/tor@default.service.d/60-tor-relay-setup.conf, only if tor@default.service allows fewer",
+			},
+		},
+		{
+			name:       "tuning for a named instance uses the template unit",
+			setup:      func(s *config.Setup) { s.System.Tuning, s.Relay.Instance = true, "relay2" },
+			want:       []string{"preflight", "repository", "update", "packages", "instance", "tuning", "unattended", "torrc", "firewall", "service", "state"},
+			wantChange: []string{"/etc/systemd/system/tor@.service.d/60-tor-relay-setup.conf, only if tor@.service allows fewer"},
 		},
 		{
 			name:       "hostname change",

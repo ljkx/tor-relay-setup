@@ -80,14 +80,14 @@ func TestStatusPrometheusFromFixture(t *testing.T) {
 		t.Errorf("exit %d, want 0: the problems are in the metrics (stderr %q)", code, errOut)
 	}
 	for _, want := range []string{
-		"# TYPE tor_relay_setup_up gauge\ntor_relay_setup_up 1\n",
-		`tor_relay_setup_info{version="0.4.9.3",nickname="FixtureRelay",fingerprint=""} 1`,
-		"tor_relay_setup_service_active 0\n",
-		`tor_relay_setup_listener{family="ipv4"} 1`,
-		`tor_relay_setup_reachable{family="ipv4"} 1`,
-		"tor_relay_setup_family_ids 1\n",
-		"tor_relay_setup_family_keys_missing 0\n",
-		"tor_relay_setup_warnings 1\n",
+		"# TYPE tor_relay_setup_up gauge\ntor_relay_setup_up{instance=\"default\"} 1\n",
+		`tor_relay_setup_info{instance="default",version="0.4.9.3",nickname="FixtureRelay",fingerprint=""} 1`,
+		"tor_relay_setup_service_active{instance=\"default\"} 0\n",
+		`tor_relay_setup_listener{instance="default",family="ipv4"} 1`,
+		`tor_relay_setup_reachable{instance="default",family="ipv4"} 1`,
+		"tor_relay_setup_family_ids{instance=\"default\"} 1\n",
+		"tor_relay_setup_family_keys_missing{instance=\"default\"} 0\n",
+		"tor_relay_setup_warnings{instance=\"default\"} 1\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %q:\n%s", want, out)

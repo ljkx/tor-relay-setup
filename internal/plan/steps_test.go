@@ -429,7 +429,7 @@ func TestTorrcStepVariants(t *testing.T) {
 			env := NewEnv(f, testFacts(), s, "p")
 			env.Now = func() time.Time { return fixedNow }
 			var rec safeRecorder
-			err := torrcStep().Run(context.Background(), env, stepReporter{rec: &rec})
+			err := torrcStep(s).Run(context.Background(), env, stepReporter{rec: &rec})
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Run() = %v, want error containing %q", err, tt.wantErr)
@@ -462,7 +462,7 @@ func TestTorrcStepRejectsInvalidSetup(t *testing.T) {
 	s := testSetup()
 	s.Relay.Nickname = "bad nick"
 	env := NewEnv(f, testFacts(), s, "p")
-	err := torrcStep().Run(context.Background(), env, stepReporter{rec: &safeRecorder{}})
+	err := torrcStep(s).Run(context.Background(), env, stepReporter{rec: &safeRecorder{}})
 	if err == nil || !strings.Contains(err.Error(), "Nickname") {
 		t.Fatalf("Run() = %v, want a Nickname validation error", err)
 	}

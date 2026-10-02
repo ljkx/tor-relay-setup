@@ -164,9 +164,10 @@ func (t *task) keys(a *App) []string {
 	return []string{"enter", "back to console"}
 }
 
-// writeTorrc verifies new torrc content with tor, installs it with a
-// backup, and reloads or restarts Tor.
-func writeTorrc(ctx context.Context, h host.Host, data []byte, restart bool, out func(string)) error {
+// writeTorrc verifies new torrc content for inst with tor, installs it with
+// a backup, and reloads or restarts that instance.
+func writeTorrc(ctx context.Context, h host.Host, inst relay.Instance, data []byte, restart bool, out func(string)) error {
+	inst = inst.OrDefault()
 	candidate, err := os.CreateTemp("", "torrc-candidate-")
 	if err != nil {
 		return err
@@ -180,12 +181,12 @@ func writeTorrc(ctx context.Context, h host.Host, data []byte, restart bool, out
 		return err
 	}
 	out("tor --verify-config")
-	if err := relay.Verify(ctx, h, candidate.Name()); err != nil {
+	if err := relay.VerifyInstance(ctx, h, inst, candidate.Name()); err != nil {
 		if !errors.Is(err, relay.ErrTorMissing) || !h.DryRun() {
 			return fmt.Errorf("tor rejected the change (nothing was written): %w", err)
 		}
 	}
-	ch, err := h.WriteFile(torrcPath, data, host.FileOptions{Mode: 0o644, Backup: true})
+	ch, err := h.WriteFile(inst.TorrcPath, data, host.FileOptions{Mode: 0o644, Backup: true})
 	if err != nil {
 		return err
 	}
@@ -196,12 +197,12 @@ func writeTorrc(ctx context.Context, h host.Host, data []byte, restart bool, out
 	if ch.BackupOf != "" {
 		out("previous torrc saved as " + ch.BackupOf)
 	}
-	tor := service.Tor{Host: h, Unit: service.DefaultUnit}
+	tor := service.Tor{Host: h, Unit: inst.Unit}
 	if restart {
-		out("systemctl restart " + service.DefaultUnit)
+		out("systemctl restart " + inst.Unit)
 		return tor.Restart(ctx)
 	}
-	out("systemctl reload " + service.DefaultUnit)
+	out("systemctl reload " + inst.Unit)
 	if err := tor.Reload(ctx); err != nil {
 		out("reload failed, restarting")
 		return tor.Restart(ctx)
@@ -209,9 +210,10 @@ func writeTorrc(ctx context.Context, h host.Host, data []byte, restart bool, out
 	return nil
 }
 
-func restartTask(_ bool) taskFunc {
+func restartTask(inst relay.Instance) taskFunc {
+	unit := inst.OrDefault().Unit
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-		tor := service.Tor{Host: h, Unit: service.DefaultUnit}
+		tor := service.Tor{Host: h, Unit: unit}
 		since := time.Now()
 		progress(10, "restarting")
 		if err := tor.Restart(ctx); err != nil {
@@ -224,7 +226,7 @@ func restartTask(_ bool) taskFunc {
 		deadline := time.Now().Add(15 * time.Second)
 		for !tor.Active(ctx) {
 			if time.Now().After(deadline) {
-				return "", errors.New(service.DefaultUnit + " did not come back; check the log")
+				return "", errors.New(unit + " did not come back; check the log")
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -237,18 +239,20 @@ func restartTask(_ bool) taskFunc {
 	}
 }
 
-func stopTask() taskFunc {
+func stopTask(inst relay.Instance) taskFunc {
+	unit := inst.OrDefault().Unit
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-		if err := (service.Tor{Host: h, Unit: service.DefaultUnit}).Stop(ctx); err != nil {
+		if err := (service.Tor{Host: h, Unit: unit}).Stop(ctx); err != nil {
 			return "", err
 		}
-		return "Tor is stopped; the relay is offline. To keep it off after reboots too: systemctl disable " + service.DefaultUnit, nil
+		return "Tor is stopped; the relay is offline. To keep it off after reboots too: systemctl disable " + unit, nil
 	}
 }
 
-func startTask() taskFunc {
+func startTask(inst relay.Instance) taskFunc {
+	unit := inst.OrDefault().Unit
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-		tor := service.Tor{Host: h, Unit: service.DefaultUnit}
+		tor := service.Tor{Host: h, Unit: unit}
 		if err := tor.Enable(ctx); err != nil {
 			return "", err
 		}
@@ -259,14 +263,15 @@ func startTask() taskFunc {
 	}
 }
 
-func reloadTask() taskFunc {
+func reloadTask(inst relay.Instance) taskFunc {
+	inst = inst.OrDefault()
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
 		progress(20, "tor --verify-config")
-		if err := relay.Verify(ctx, h, torrcPath); err != nil && !errors.Is(err, relay.ErrTorMissing) {
+		if err := relay.VerifyInstance(ctx, h, inst, inst.TorrcPath); err != nil && !errors.Is(err, relay.ErrTorMissing) {
 			return "", fmt.Errorf("torrc is invalid, not reloading: %w", err)
 		}
 		progress(60, "reloading")
-		if err := (service.Tor{Host: h, Unit: service.DefaultUnit}).Reload(ctx); err != nil {
+		if err := (service.Tor{Host: h, Unit: inst.Unit}).Reload(ctx); err != nil {
 			return "", err
 		}
 		return "Tor re-read its configuration.", nil
@@ -300,12 +305,17 @@ func updateTask() taskFunc {
 	}
 }
 
-func backupTask(keyDir string) taskFunc {
+func backupTask(inst relay.Instance, keyDir string) taskFunc {
+	inst = inst.OrDefault()
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
 		if keyDir == "" {
-			keyDir = "/var/lib/tor/keys"
+			keyDir = inst.KeyDir
 		}
-		name := "/root/tor-relay-keys-" + time.Now().UTC().Format("20060102T150405Z") + ".tar.gz"
+		prefix := "/root/tor-relay-keys-"
+		if !inst.IsDefault() {
+			prefix += inst.Name + "-"
+		}
+		name := prefix + time.Now().UTC().Format("20060102T150405Z") + ".tar.gz"
 		if h.DryRun() {
 			return "Dry run: would archive " + keyDir + " to " + name + " (mode 600).", nil
 		}

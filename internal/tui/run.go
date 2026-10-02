@@ -136,7 +136,7 @@ func RunApplyPlain(opt Options, s config.Setup, facts system.Facts, yes bool, in
 		return nil
 	}
 	fmt.Fprintln(out, "\nRelay configured. Open the console with: sudo tor-relay-setup")
-	if fp := readFingerprint(opt.Host); fp != "" {
+	if fp := readFingerprint(opt.Host, s.Instance()); fp != "" {
 		fmt.Fprintln(out, "Fingerprint:", fp)
 	}
 	if env.FamilyID != "" {

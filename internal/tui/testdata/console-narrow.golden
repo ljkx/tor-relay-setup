@@ -56,9 +56,9 @@
 │  u  Update Tor                                                             │
 │  b  Back up keys                                                           │
 │  w  Reconfigure                                                            │
+│  n  Add a relay                                                            │
 │  q  Quit                                                                   │
 ╰────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

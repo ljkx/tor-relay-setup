@@ -22,6 +22,9 @@ import (
 // Report is a snapshot of the relay.
 type Report struct {
 	CollectedAt time.Time `json:"collected_at"`
+	// Instance names the Debian tor instance: "default" (/etc/tor/torrc,
+	// tor@default) or the tor-instance-create name.
+	Instance string `json:"instance"`
 
 	Tor struct {
 		Installed bool   `json:"installed"`
@@ -79,8 +82,11 @@ type Report struct {
 
 // Options configures Collect.
 type Options struct {
-	TorrcPath string        // default /etc/tor/torrc
-	Unit      string        // default tor@default
+	// Instance is the tor instance to inspect; the zero value is the default
+	// instance. TorrcPath and Unit override its paths (tests, odd setups).
+	Instance  relay.Instance
+	TorrcPath string        // default: the instance's torrc
+	Unit      string        // default: the instance's unit
 	Window    time.Duration // journal window for the self-test, default 24h
 }
 
@@ -89,17 +95,19 @@ func (r Report) Healthy() bool { return len(r.Warnings) == 0 }
 
 // Collect probes the local relay concurrently.
 func Collect(ctx context.Context, h host.Host, opt Options) Report {
+	inst := opt.Instance.OrDefault()
 	if opt.TorrcPath == "" {
-		opt.TorrcPath = "/etc/tor/torrc"
+		opt.TorrcPath = inst.TorrcPath
 	}
 	if opt.Unit == "" {
-		opt.Unit = service.DefaultUnit
+		opt.Unit = inst.Unit
 	}
 	if opt.Window == 0 {
 		opt.Window = 24 * time.Hour
 	}
 	var r Report
 	r.CollectedAt = time.Now()
+	r.Instance = inst.Name
 	r.Service.Unit = opt.Unit
 	tor := service.Tor{Host: h, Unit: opt.Unit}
 
@@ -187,7 +195,7 @@ func Collect(ctx context.Context, h host.Host, opt Options) Report {
 			r.Relay.Accounting = max + "/month · " + rule
 		}
 
-		dataDir := doc.DataDirectory()
+		dataDir := doc.DataDirectoryOr(inst.DataDir)
 		if fp, err := h.ReadFile(strings.TrimRight(dataDir, "/") + "/fingerprint"); err == nil {
 			if fields := strings.Fields(string(fp)); len(fields) > 0 {
 				r.Relay.Fingerprint = strings.ToUpper(fields[len(fields)-1])

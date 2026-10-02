@@ -15,6 +15,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/plan"
+	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/service"
 	"github.com/ljkx/tor-relay-setup/internal/system"
 )
@@ -214,7 +215,7 @@ func (ap *apply) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 			ap.logFile = nil
 		}
 		if msg.err == nil && !a.opt.DryRun {
-			ap.finger = readFingerprint(a.opt.Host)
+			ap.finger = readFingerprint(a.opt.Host, ap.setup.Instance())
 			return ap, ap.waitReachable(a)
 		}
 		return ap, nil
@@ -281,7 +282,7 @@ func (ap *apply) waitReachable(a *App) tea.Cmd {
 			prev()
 		}
 	}
-	tor := service.Tor{Host: a.opt.Host, Unit: service.DefaultUnit}
+	tor := service.Tor{Host: a.opt.Host, Unit: ap.setup.Instance().Unit}
 	since, wantV6 := ap.env.RestartedAt, ap.setup.Relay.IPv6 != ""
 	return tea.Batch(func() tea.Msg {
 		st, err := tor.WaitReachable(ctx, since, 5*time.Second, wantV6)
@@ -463,8 +464,14 @@ func (ap *apply) keys(a *App) []string {
 	return []string{"enter", "finish", "l", "output"}
 }
 
-func readFingerprint(h host.Host) string {
-	data, err := h.ReadFile("/var/lib/tor/fingerprint")
+// readFingerprint reads the relay fingerprint from inst's DataDirectory.
+func readFingerprint(h host.Host, inst relay.Instance) string {
+	inst = inst.OrDefault()
+	dataDir := inst.DataDir
+	if torrc, err := h.ReadFile(inst.TorrcPath); err == nil {
+		dataDir = relay.ParseDocument(torrc).DataDirectoryOr(dataDir)
+	}
+	data, err := h.ReadFile(strings.TrimRight(dataDir, "/") + "/fingerprint")
 	if err != nil {
 		return ""
 	}

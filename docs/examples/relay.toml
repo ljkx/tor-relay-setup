@@ -13,7 +13,8 @@ or_port = 9001
 mode = "guard"            # guard | exit
 ipv6 = ""                 # a global IPv6 address, or empty for none
 sandbox = true
-metrics_port = true       # 127.0.0.1:9035, local only
+metrics_port = true       # local only: 127.0.0.1:9035, next free port from 9036 for other instances
+instance = ""             # empty: /etc/tor/torrc (tor@default); NAME: a second relay via tor-instance-create (tor@NAME)
 
 [exit]                    # only used when mode = "exit"
 provider_permission = false
@@ -42,3 +43,4 @@ unattended_upgrades = true
 nyx = true
 firewall = "auto"         # auto | none
 enable_ufw = true
+tuning = false            # kernel/service limits for relays above ~100 Mbit/s

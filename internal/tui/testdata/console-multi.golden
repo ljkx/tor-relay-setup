@@ -1,5 +1,7 @@
  ◆ tor-relay-setup vtest                                                                                                           old-host
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Relays  1 default ✓   2 relay2 ✓   3 relay3 !    [ ] switch
+ ! 1 of 3 relays need attention: relay3 (tor@relay3 is not running)
 ╭────────────────────────────────╮ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
 │ Actions                        │ │ Relay                                           │ │ Health                                          │
 │  r  Refresh                    │ │ Nickname     GoodRelay                          │ │ Service       ✓ running                         │
@@ -41,4 +43,4 @@
 
 
 
- ↑/↓ select  ·  enter run  ·  r refresh  ·  q quit
+ ↑/↓ select  ·  enter run  ·  [/] relay default  ·  r refresh  ·  q quit
