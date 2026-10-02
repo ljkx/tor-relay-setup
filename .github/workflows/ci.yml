@@ -174,19 +174,56 @@ jobs:
           sudo bin/tor-relay-setup apply --config again.toml --yes --plain
           sudo grep -Fx "FamilyId ${id}" /etc/tor/torrc
           systemctl is-active tor@default
+      - name: A second relay on the same server
+        run: |
+          sed -e 's/^nickname = "CiRelay"/nickname = "CiRelay2"\ninstance = "relay2"/' \
+            -e 's/^or_port = 9001/or_port = 9002/' ci-relay.toml > second.toml
+          sudo bin/tor-relay-setup apply --config second.toml --yes --plain
+          systemctl is-active tor@relay2
+          sudo ufw status | grep -E '^9002/tcp +ALLOW'
+          for _ in $(seq 1 30); do
+            sudo bin/tor-relay-setup status --all --json > all.json || true
+            jq -e 'all(.[]; .listener.ipv4)' all.json > /dev/null && break
+            sleep 2
+          done
+          jq . all.json
+          jq -e 'length == 2 and all(.[]; .service.active and .family.missing_keys == null)
+            and (map(.instance) | sort) == ["default", "relay2"]
+            and (map(.family.ids) | unique | length) == 1' all.json
+          curl -fsS http://127.0.0.1:9036/metrics | grep -F 'tor_relay_traffic_bytes{direction="read"}'
+      - name: fleet-probe reports both relays
+        run: sudo bin/tor-relay-setup fleet-probe | jq -e '(.relays | length) == 2 and all(.relays[]; .traffic != null)'
       - name: status --format prometheus
         run: |
-          sudo bin/tor-relay-setup status --format prometheus | tee metrics.prom
-          grep -Fx 'tor_relay_setup_service_active 1' metrics.prom
+          sudo bin/tor-relay-setup status --all --format prometheus | tee metrics.prom
+          grep -Fx 'tor_relay_setup_service_active{tor_instance="default"} 1' metrics.prom
+          grep -Fx 'tor_relay_setup_service_active{tor_instance="relay2"} 1' metrics.prom
+      - name: alert notices a stopped relay, also from its hardened systemd unit
+        run: |
+          sudo install -d -m 0700 /etc/tor-relay-setup
+          printf '%s\n' 'min_severity = "info"' '[[command]]' 'argv = ["/bin/sh", "-c", "cat >> /var/lib/tor-relay-setup/alerts.jsonl"]' \
+            | sudo install -m 0600 /dev/stdin /etc/tor-relay-setup/alerts.toml
+          sudo bin/tor-relay-setup alert test
+          sudo bin/tor-relay-setup alert run
+          sudo systemctl stop tor@relay2
+          sudo bin/tor-relay-setup alert run
+          sudo cat /var/lib/tor-relay-setup/alerts.jsonl
+          sudo grep -q relay2 /var/lib/tor-relay-setup/alerts.jsonl
+          sudo systemctl start tor@relay2
+          sudo bin/tor-relay-setup alert install --every 1m
+          systemctl is-enabled tor-relay-setup-alert.timer
+          sudo systemctl start tor-relay-setup-alert.service
+          systemctl show -p Result --value tor-relay-setup-alert.service | grep -Fx success
       - name: uninstall removes the tool, never Tor
         run: |
           sudo bin/tor-relay-setup uninstall --yes --plain
           test ! -e /var/lib/tor-relay-setup && test ! -e bin/tor-relay-setup
-          systemctl is-active tor@default
+          test ! -e /etc/systemd/system/tor-relay-setup-alert.timer
+          systemctl is-active tor@default tor@relay2
           sudo test -s /var/lib/tor/keys/ci-family.secret_family_key
       - name: Tor log
         if: always()
-        run: sudo journalctl -u tor@default --no-pager -n 60 || true
+        run: sudo journalctl -u tor@default -u tor@relay2 -u tor-relay-setup-alert --no-pager -n 120 || true
 
   apt-repo:
     name: apt repository build
