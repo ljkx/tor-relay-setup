@@ -110,6 +110,35 @@ type Options struct {
 // Healthy reports whether nothing needs attention.
 func (r Report) Healthy() bool { return len(r.Warnings) == 0 }
 
+// Reachability verdicts for ReachabilityVerdict.
+const (
+	ReachUnknown = iota // no evidence either way
+	ReachYes
+	ReachNo
+)
+
+// ReachabilityVerdict says whether the ORPort is reachable from outside, with
+// a short explanation. tor runs its self-test only when it starts, so a
+// relay that has been up for more than the journal window has no recent
+// notice; a relay Tor Metrics reports as running in the consensus is
+// evidently reachable (the directory authorities measured it), so that
+// counts too. Without either, the answer is unknown, not a failure.
+func (r Report) ReachabilityVerdict() (verdict int, text string) {
+	switch {
+	case r.Reachability.IPv4 && r.Reachability.IPv6:
+		return ReachYes, "reachable from outside (IPv4 + IPv6)"
+	case r.Reachability.IPv4:
+		return ReachYes, "reachable from outside"
+	case r.Reachability.Failed:
+		return ReachNo, "NOT reachable from outside"
+	case r.Directory != nil && r.Directory.Running:
+		return ReachYes, "running in the consensus (tor self-tests only at startup)"
+	case r.BridgeDirectory != nil && r.BridgeDirectory.Running:
+		return ReachYes, "running, per the bridge authority (tor self-tests only at startup)"
+	}
+	return ReachUnknown, "not tested in the last 24 h (tor self-tests only at startup)"
+}
+
 // Collect probes the local relay concurrently.
 func Collect(ctx context.Context, h host.Host, opt Options) Report {
 	inst := opt.Instance.OrDefault()

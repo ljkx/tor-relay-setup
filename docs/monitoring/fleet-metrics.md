@@ -45,7 +45,7 @@ relay, its configuration decides (`exit` or `middle`). For bridges
 | `relay_info` | `version`, `country`, `as`, `as_name`, `transport` | 1. `country` is the lower-case ISO code from Onionoo; `transport` is `obfs4`/`webtunnel` for bridges, empty otherwise |
 | `relay_service_active` | | 1 when the tor unit is active |
 | `relay_listener` | `family` (`ipv4`/`ipv6`) | 1 when the ORPort listens |
-| `relay_reachable` | `family` | 1 when tor's self-test confirmed reachability |
+| `relay_reachable` | `family` | 1 when the ORPort is reachable (tor's self-test, or for IPv4 running in the consensus: tor self-tests only at startup), 0 when the self-test failed, absent when unknown |
 | `relay_warnings` | | number of status warnings |
 | `relay_published` | | 1 when Tor Metrics lists the relay |
 | `relay_running` | | 1 when Tor Metrics reports it running |

@@ -651,7 +651,7 @@ func TestConsoleCards(t *testing.T) {
 			name:   "unsupported tor and no self-test",
 			width:  120,
 			mutate: func(c *console) { c.report.Tor.Supported = false; c.report.Reachability = status.Report{}.Reachability },
-			want:   []string{"! 0.4.9.3", "no self-test in the last 24 h"},
+			want:   []string{"! 0.4.9.3", "not tested since startup"},
 		},
 		{
 			name:  "recent log",

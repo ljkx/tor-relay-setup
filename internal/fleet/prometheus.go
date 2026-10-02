@@ -11,6 +11,7 @@ import (
 
 	"github.com/ljkx/tor-relay-setup/internal/metrics"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
+	"github.com/ljkx/tor-relay-setup/internal/status"
 )
 
 // MetricPrefix starts every fleet metric name. The names, labels and
@@ -284,12 +285,26 @@ func (m *Model) writeProbe(e *exposition, base []metrics.Label, r *Relay, p *Rel
 	rep := p.Report
 	e.gauge("relay_service_active", "1 when the relay's tor unit is active.", b2f(rep.Service.Active), base...)
 	if rep.Relay.Configured && rep.Relay.ORPort > 0 {
-		const listen, reach = "1 when something listens on the relay's ORPort.", "1 when tor's self-test confirmed the ORPort is reachable (last 24 hours)."
+		const listen, reach = "1 when something listens on the relay's ORPort.", "1 when the ORPort is reachable from outside (tor's self-test, or running in the consensus); 0 when the self-test failed; absent when unknown."
 		e.gauge("relay_listener", listen, b2f(rep.Listener.IPv4), with(base, label("family", "ipv4"))...)
-		e.gauge("relay_reachable", reach, b2f(rep.Reachability.IPv4), with(base, label("family", "ipv4"))...)
+		// tor self-tests only at startup, so a long-running relay has no
+		// recent notice: that is unknown, not unreachable. A relay running in
+		// the consensus is reachable (the authorities measured it).
+		withDir := rep
+		if withDir.Directory == nil {
+			withDir.Directory = m.DirectoryOf(r)
+		}
+		switch verdict, _ := withDir.ReachabilityVerdict(); verdict {
+		case status.ReachYes:
+			e.gauge("relay_reachable", reach, 1, with(base, label("family", "ipv4"))...)
+		case status.ReachNo:
+			e.gauge("relay_reachable", reach, 0, with(base, label("family", "ipv4"))...)
+		}
 		if rep.Relay.IPv6 {
 			e.gauge("relay_listener", listen, b2f(rep.Listener.IPv6), with(base, label("family", "ipv6"))...)
-			e.gauge("relay_reachable", reach, b2f(rep.Reachability.IPv6), with(base, label("family", "ipv6"))...)
+			if rep.Reachability.IPv6 {
+				e.gauge("relay_reachable", reach, 1, with(base, label("family", "ipv6"))...)
+			}
 		}
 	}
 	e.gauge("relay_warnings", "Number of the relay's own status warnings.", float64(len(rep.Warnings)), base...)

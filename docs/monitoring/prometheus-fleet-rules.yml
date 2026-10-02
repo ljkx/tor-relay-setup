@@ -99,7 +99,7 @@ groups:
           severity: critical
         annotations:
           summary: "The ORPort of {{ $labels.nickname }} on {{ $labels.host }} is not reachable from outside"
-          description: "tor's self-test could not confirm reachability; check the host and provider firewalls."
+          description: "tor's self-test failed (the series is absent, not 0, while a long-running relay has no recent self-test); check the host and provider firewalls."
 
       - alert: TorFleetRelayNotRunningInConsensus
         expr: tor_relay_fleet_relay_published == 1 and tor_relay_fleet_relay_running == 0
