@@ -142,6 +142,9 @@ func RunApplyPlain(opt Options, s config.Setup, facts system.Facts, yes bool, in
 	if env.FamilyID != "" {
 		fmt.Fprintln(out, "FamilyId:", env.FamilyID)
 	}
+	if s.IsBridge() {
+		fmt.Fprintln(out, "Bridge line: sudo tor-relay-setup status (once tor has started the transport)")
+	}
 	return nil
 }
 

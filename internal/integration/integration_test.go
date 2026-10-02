@@ -12,6 +12,7 @@ package integration
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,33 @@ func TestSetupInContainer(t *testing.T) {
 	}
 	if err := relay.Verify(ctx, h, "/etc/tor/torrc"); err != nil {
 		t.Fatalf("installed torrc does not verify: %v", err)
+	}
+
+	// The bridge, exit policy and offline key layouts verify with the
+	// installed tor and Debian's defaults too.
+	notice := filepath.Join(t.TempDir(), "tor-exit-notice.html")
+	if err := os.WriteFile(notice, relay.RenderExitNotice("CIRelay", "ci@example.org"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := relay.Config{Nickname: "CIRelay", ContactInfo: "ci@example.org", ORPort: 9443, Mode: relay.ModeGuard}
+	obfs4, webtunnel, exit, offline := base, base, base, base
+	obfs4.Mode, obfs4.Bridge = relay.ModeBridge, relay.Bridge{Transport: relay.TransportObfs4, Plugin: relay.Obfs4ProxyPath, Port: 8443, Distribution: "none"}
+	webtunnel.Mode = relay.ModeBridge
+	webtunnel.Bridge = relay.Bridge{Transport: relay.TransportWebTunnel, Plugin: relay.WebTunnelPath, Port: relay.DefaultWebTunnelPort, Distribution: "https", URL: "https://bridge.example.org/CIsecretPath123"}
+	exit.Mode, exit.ExitPolicy, exit.ExitNotice = relay.ModeExit, relay.PolicyCustom, notice
+	exit.ExitPolicyLines = []string{"accept *:80", "accept *:443", "reject *:*"}
+	offline.OfflineMasterKey = true
+	for name, c := range map[string]relay.Config{"obfs4": obfs4, "webtunnel": webtunnel, "exit": exit, "offline": offline} {
+		if err := c.Validate(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		path := filepath.Join(t.TempDir(), "torrc")
+		if err := os.WriteFile(path, c.Render("tor-relay-setup integration", time.Now()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := relay.Verify(ctx, h, path); err != nil {
+			t.Errorf("%s torrc does not verify: %v", name, err)
+		}
 	}
 
 	// Applying again changes nothing and does not fail.

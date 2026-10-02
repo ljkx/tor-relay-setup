@@ -47,6 +47,11 @@ type (
 		err error
 		fp  string
 	}
+	bridgeDirMsg struct {
+		bridge *onionoo.Bridge
+		err    error
+		fp     string
+	}
 	sampleMsg struct {
 		sample metrics.Sample
 		err    error
@@ -59,7 +64,14 @@ type (
 type action struct {
 	key, label, desc string
 	run              func(a *App, c *console) (screen, tea.Cmd)
+	// show limits the action to relays it applies to; nil shows it always.
+	show func(r status.Report) bool
 }
+
+// Which relays an action applies to.
+func isBridge(r status.Report) bool  { return r.Relay.Bridge }
+func notBridge(r status.Report) bool { return !r.Relay.Bridge }
+func isExit(r status.Report) bool    { return r.Relay.Exit && !r.Relay.Bridge }
 
 // console is the operator dashboard for an existing relay.
 type console struct {
@@ -71,9 +83,13 @@ type console struct {
 	dirLoading bool
 	dirAt      time.Time
 	history    *onionoo.Bandwidth
-	cursor     int
-	actions    []action
-	ticking    bool
+	// bridgeDir is the Tor Metrics entry of a bridge (by hashed fingerprint).
+	bridgeDir *onionoo.Bridge
+	cursor    int
+	// actions are the ones that apply to the selected relay, out of all.
+	actions []action
+	all     []action
+	ticking bool
 
 	// Live traffic from the MetricsPort.
 	last    metrics.Sample
@@ -97,26 +113,36 @@ func (c *console) multi() bool { return len(c.instances) > 1 }
 
 func newConsole() *console {
 	c := &console{}
-	c.actions = []action{
-		{"r", "Refresh", "Re-check everything now", func(a *App, c *console) (screen, tea.Cmd) {
+	c.all = []action{
+		{key: "r", label: "Refresh", desc: "Re-check everything now", run: func(a *App, c *console) (screen, tea.Cmd) {
 			c.dirAt = time.Time{} // ask Tor Metrics again too
 			return c, c.refresh(a)
 		}},
-		{"l", "Live logs", "Follow the Tor log in place", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "l", label: "Live logs", desc: "Follow the Tor log in place", run: func(a *App, c *console) (screen, tea.Cmd) {
 			v := newLogView(c)
 			return v, v.start(a)
 		}},
-		{"f", "Relay family", "Keys, FamilyIds, share, import", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "i", label: "Bridge line", desc: "Share the bridge, check reachability", show: isBridge, run: func(a *App, c *console) (screen, tea.Cmd) {
+			return newBridgeView(c), nil
+		}},
+		{key: "f", label: "Relay family", desc: "Keys, FamilyIds, share, import", show: notBridge, run: func(a *App, c *console) (screen, tea.Cmd) {
 			return newFamilyView(a, c), nil
 		}},
-		{"e", "Edit settings", "Nickname, contact, bandwidth, metrics", newEditView},
-		{"s", "Restart Tor", "Restart and verify the service", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "x", label: "Exit policy", desc: "Ports, custom rules, IPv6, exit notice", show: isExit, run: newExitPolicyView},
+		{key: "e", label: "Edit settings", desc: "Nickname, contact, bandwidth, metrics", run: newEditView},
+		{key: "k", label: "Identity keys", desc: "Offline master key, signing key expiry", run: func(a *App, c *console) (screen, tea.Cmd) {
+			return newKeysView(c), nil
+		}},
+		{key: "c", label: "ContactInfo proof", desc: "Files to publish on your website", show: notBridge, run: func(a *App, c *console) (screen, tea.Cmd) {
+			return newProofView(a, c), nil
+		}},
+		{key: "s", label: "Restart Tor", desc: "Restart and verify the service", run: func(a *App, c *console) (screen, tea.Cmd) {
 			return newTask(a, c, "Restart Tor"+instanceTitle(c.selected()), restartTask(c.selected()))
 		}},
-		{"o", "Reload Tor", "Re-read torrc without a restart", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "o", label: "Reload Tor", desc: "Re-read torrc without a restart", run: func(a *App, c *console) (screen, tea.Cmd) {
 			return newTask(a, c, "Reload Tor"+instanceTitle(c.selected()), reloadTask(c.selected()))
 		}},
-		{"p", "Stop / start Tor", "Take the relay offline, or bring it back", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "p", label: "Stop / start Tor", desc: "Take the relay offline, or bring it back", run: func(a *App, c *console) (screen, tea.Cmd) {
 			inst := c.selected()
 			if c.report.Service.Active {
 				return newConfirmView(c, "Stop Tor"+instanceTitle(inst)+"? The relay goes offline until you start it again.", func() (screen, tea.Cmd) {
@@ -125,13 +151,13 @@ func newConsole() *console {
 			}
 			return newTask(a, c, "Start Tor"+instanceTitle(inst), startTask(inst))
 		}},
-		{"u", "Update Tor", "Refresh apt and upgrade tor", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "u", label: "Update Tor", desc: "Refresh apt and upgrade tor", run: func(a *App, c *console) (screen, tea.Cmd) {
 			return newTask(a, c, "Update Tor", updateTask())
 		}},
-		{"b", "Back up keys", "Archive identity + family keys to /root", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "b", label: "Back up keys", desc: "Archive identity + family keys to /root", run: func(a *App, c *console) (screen, tea.Cmd) {
 			return newTask(a, c, "Back up keys"+instanceTitle(c.selected()), backupTask(c.selected(), c.report.Family.KeyDirectory))
 		}},
-		{"w", "Reconfigure", "Run the full setup wizard again", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "w", label: "Reconfigure", desc: "Run the full setup wizard again", run: func(a *App, c *console) (screen, tea.Cmd) {
 			prefill, ok := instanceSetup(a.opt.Host, c.selected())
 			if !ok {
 				prefill = config.Default()
@@ -142,16 +168,34 @@ func newConsole() *console {
 			w := newWizard(a, prefill)
 			return w, w.init(a)
 		}},
-		{"n", "Add a relay", "Another tor instance on this server", func(a *App, c *console) (screen, tea.Cmd) {
+		{key: "n", label: "Add a relay", desc: "Another tor instance on this server", run: func(a *App, c *console) (screen, tea.Cmd) {
 			if found, _ := relay.Discover(a.opt.Host); len(found) >= relay.MaxRelaysPerIPv4 {
 				return c, toast(fmt.Sprintf("This server already runs %d relays, the most the directory authorities list per IPv4 address.", len(found)))
 			}
 			w := newInstanceWizard(a, NewInstanceSetup(a.opt.Host, c.selected()))
 			return w, w.init(a)
 		}},
-		{"q", "Quit", "", func(a *App, c *console) (screen, tea.Cmd) { return c, quit(nil) }},
+		{key: "q", label: "Quit", run: func(a *App, c *console) (screen, tea.Cmd) { return c, quit(nil) }},
 	}
+	c.filterActions()
 	return c
+}
+
+// filterActions shows the actions that apply to the selected relay (bridge
+// line for bridges, exit policy for exits, ...), keeping the cursor on the
+// same action when it is still there.
+func (c *console) filterActions() {
+	current := ""
+	if c.cursor < len(c.actions) {
+		current = c.actions[c.cursor].key
+	}
+	c.actions = c.actions[:0:0]
+	for _, act := range c.all {
+		if act.show == nil || act.show(c.report) {
+			c.actions = append(c.actions, act)
+		}
+	}
+	c.cursor = max(slices.IndexFunc(c.actions, func(a action) bool { return a.key == current }), 0)
 }
 
 // init registers the console with the app, so its background updates keep
@@ -213,6 +257,12 @@ func (c *console) background(a *App, msg tea.Msg) (cmd tea.Cmd, ok bool) {
 		}
 		c.dir, c.dirErr, c.dirLoading, c.dirAt = msg.relay, msg.err, false, time.Now()
 		return nil, true
+	case bridgeDirMsg:
+		if msg.fp != "" && msg.fp != c.report.Relay.Fingerprint {
+			return nil, true
+		}
+		c.bridgeDir, c.dirErr, c.dirLoading, c.dirAt = msg.bridge, msg.err, false, time.Now()
+		return nil, true
 	case historyMsg:
 		if msg.err == nil && (msg.fp == "" || msg.fp == c.report.Relay.Fingerprint) {
 			c.history = msg.bw
@@ -256,6 +306,7 @@ func (c *console) record(s metrics.Sample, err error) {
 func (c *console) loadReport(a *App, r status.Report) tea.Cmd {
 	first := !c.loaded
 	c.report, c.loaded, c.updated = r, true, time.Now()
+	c.filterActions()
 	if first {
 		return tea.Batch(c.lookup(a), c.scrape())
 	}
@@ -301,7 +352,7 @@ func (c *console) switchTo(a *App, i int) tea.Cmd {
 	if i < len(c.overview) {
 		c.report = c.overview[i]
 	}
-	c.dir, c.dirErr, c.dirLoading, c.dirAt, c.history = nil, nil, false, time.Time{}, nil
+	c.dir, c.dirErr, c.dirLoading, c.dirAt, c.history, c.bridgeDir = nil, nil, false, time.Time{}, nil, nil
 	c.last, c.rate, c.rates, c.liveErr = metrics.Sample{}, metrics.Rate{}, nil, nil
 	return tea.Batch(c.lookup(a), c.scrape(), c.refresh(a))
 }
@@ -320,6 +371,16 @@ func (c *console) lookup(a *App) tea.Cmd {
 	}
 	c.dirLoading = true
 	client := a.opt.Onionoo
+	if c.report.Relay.Bridge {
+		// Bridges are looked up by hashed fingerprint only, so the real one
+		// never travels in a URL; Onionoo has no traffic graph for them here.
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			b, err := status.BridgeDirectory(ctx, client, fp)
+			return bridgeDirMsg{bridge: b, err: err, fp: fp}
+		}
+	}
 	return tea.Batch(
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -344,6 +405,7 @@ func (c *console) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 	if !ok {
 		return c, nil
 	}
+	c.filterActions()
 	switch k := key.String(); k {
 	case "up", "k":
 		c.cursor = (c.cursor - 1 + len(c.actions)) % len(c.actions)
@@ -382,6 +444,7 @@ func (c *console) view(a *App) string {
 	if stacked {
 		cardsW, menuW = w, w
 	}
+	c.filterActions()
 
 	var menu strings.Builder
 	for i, act := range c.actions {
@@ -463,12 +526,22 @@ func (c *console) cards(a *App, width int) string {
 	if r.Relay.IPv6 {
 		ports += " (IPv4 + IPv6)"
 	}
-	relayCard := panel(t, "Relay", kv(t, [][2]string{
+	relayRows := [][2]string{
 		{"Nickname", r.Relay.Nickname},
 		{"Fingerprint", fp},
 		{"Mode", mode},
 		{"ORPort", ports},
-	}), cw, false)
+	}
+	if b := r.Bridge; b != nil {
+		relayRows[2][1] = "bridge (" + b.Transport + ")"
+		transport := "TCP " + itoa(b.Port)
+		if b.Transport == string(relay.TransportWebTunnel) {
+			relayRows[3][1] = "127.0.0.1 (auto)"
+			transport = "127.0.0.1:" + itoa(b.Port) + " behind the website"
+		}
+		relayRows = append(relayRows, [2]string{"Transport", transport}, [2]string{"Distribution", b.Distribution})
+	}
+	relayCard := panel(t, "Relay", kv(t, relayRows), cw, false)
 
 	reach := t.Subtle.Render("no self-test in the last 24 h")
 	switch {
@@ -483,14 +556,31 @@ func (c *console) cards(a *App, width int) string {
 	if version == "" {
 		version = "not installed"
 	}
-	health := panel(t, "Health", kv(t, [][2]string{
+	healthRows := [][2]string{
 		{"Service", statusIcon(t, r.Service.Active, false) + " " + map[bool]string{true: "running", false: "stopped"}[r.Service.Active]},
 		{"tor", statusIcon(t, r.Tor.Supported, r.Tor.Installed) + " " + version},
 		{"Listener", statusIcon(t, r.Listener.IPv4 || r.Listener.IPv6, false) + " TCP " + itoa(r.Relay.ORPort)},
 		{"Reachability", reach},
-	}), cwRight, false)
+	}
+	if b := r.Bridge; b != nil {
+		healthRows = append(healthRows, [2]string{"Transport", statusIcon(t, b.Listening, false) + " " + b.Transport + map[bool]string{true: " listening", false: " not listening"}[b.Listening]})
+		if b.Transport == string(relay.TransportWebTunnel) {
+			// The ORPort is 127.0.0.1:auto and AssumeReachable 1: no self-test.
+			healthRows = slices.Delete(healthRows, 2, 4)
+			if b.WebServer != "" {
+				healthRows = append(healthRows, [2]string{"nginx", statusIcon(t, b.WebServer == "active", false) + " " + b.WebServer})
+			}
+		}
+	}
+	if k := r.Keys; k != nil && k.Managed() {
+		healthRows = append(healthRows, [2]string{"Signing key", signingKeyLine(t, *k, time.Now())})
+	}
+	health := panel(t, "Health", kv(t, healthRows), cwRight, false)
 
 	famBody := t.Subtle.Render("single relay (no FamilyId)")
+	if r.Relay.Bridge {
+		famBody = t.Subtle.Render("none: bridges never join a family")
+	}
 	if len(r.Family.IDs) > 0 {
 		var rows [][2]string
 		for _, id := range r.Family.IDs {
@@ -536,6 +626,14 @@ func (c *console) cards(a *App, width int) string {
 		dirBody = a.spin.View() + " " + t.Subtle.Render("asking Tor Metrics…")
 	case c.dirErr != nil:
 		dirBody = statusIcon(t, false, true) + " " + t.Subtle.Render(truncate(c.dirErr.Error(), cw-6))
+	case r.Relay.Bridge && c.bridgeDir != nil:
+		dirW := cw
+		if cols == 2 {
+			dirW = width
+		}
+		dirBody = kv(t, bridgeDirRows(t, c.bridgeDir, dirW-16))
+	case r.Relay.Bridge && r.Relay.Fingerprint != "":
+		dirBody = t.Subtle.Render("Not published yet — bridges appear after about 3 hours, by hashed fingerprint.")
 	case c.dir == nil && r.Relay.Fingerprint != "":
 		dirBody = t.Subtle.Render("Not published yet — new relays appear after about 3 hours.")
 	case c.dir == nil:

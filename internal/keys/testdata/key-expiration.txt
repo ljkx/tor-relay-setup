@@ -1,0 +1,1 @@
+Oct 02 14:51:47.987 [notice] The signing certificate stored in DATADIR/keys/ed25519_signing_cert is valid until 2106514800.

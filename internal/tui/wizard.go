@@ -33,9 +33,26 @@ type answers struct {
 
 	ExitPermission bool
 	ExitPolicy     string
+	ExitCustom     string // custom exit policy, one entry per line
+	ExitNotice     bool
 	IPv6Exit       bool
 	Unbound        bool
 	LockResolv     bool
+
+	BridgeTransport string
+	Obfs4Port       string
+	Obfs4Dist       string
+	Domain          string
+	WTPath          string
+	WTDist          string
+	WTLocalPort     int // kept from torrc, never asked
+	WebServer       string
+	Certificate     string
+	CertFile        string
+	KeyFile         string
+	CertbotEmail    string
+	CertbotAgree    bool
+	OfflineKey      bool // kept from torrc, never asked
 
 	FamilyMode   string
 	FamilyKey    string
@@ -102,6 +119,37 @@ func answersFrom(s config.Setup) *answers {
 	if a.FamilyMode == "" {
 		a.FamilyMode = "none"
 	}
+	a.ExitCustom = strings.Join(s.Exit.CustomPolicy, "\n")
+	if a.ExitCustom == "" {
+		a.ExitCustom = strings.Join(relay.WebExitPolicy, "\n")
+	}
+	a.ExitNotice = s.Exit.Notice
+	b := s.Bridge
+	a.BridgeTransport, a.Domain, a.WTPath, a.WTLocalPort = b.Transport, b.Domain, b.Path, b.LocalPort
+	if a.BridgeTransport == "" {
+		a.BridgeTransport = string(relay.TransportObfs4)
+	}
+	if a.WTPath == "" {
+		// Generated now so a saved relay.toml keeps it.
+		a.WTPath = plan.NewWebTunnelPath()
+	}
+	a.Obfs4Port = itoa(b.Obfs4Port)
+	if b.Obfs4Port == 0 {
+		a.Obfs4Port = itoa(config.DefaultObfs4Port)
+	}
+	a.Obfs4Dist, a.WTDist = "any", "https"
+	if b.Distribution != "" {
+		a.Obfs4Dist, a.WTDist = b.Distribution, b.Distribution
+	}
+	a.WebServer, a.Certificate = b.WebServer, b.Certificate
+	if a.WebServer == "" {
+		a.WebServer = config.WebServerNginx
+	}
+	if a.Certificate == "" {
+		a.Certificate = config.CertCertbot
+	}
+	a.CertFile, a.KeyFile, a.CertbotEmail, a.CertbotAgree = b.CertFile, b.KeyFile, b.CertbotEmail, b.CertbotAgreeTOS
+	a.OfflineKey = s.Relay.OfflineMasterKey
 	if s.Relay.Contact != "" {
 		a.ContactFormat, a.ContactFree = "free", s.Relay.Contact
 	}
@@ -114,6 +162,12 @@ func answersFrom(s config.Setup) *answers {
 	a.Keep = append([]string(nil), s.Family.Keep...)
 	a.RateKBytes, a.BurstKBytes, a.AccountingGBytes = s.Bandwidth.RateKBytes, s.Bandwidth.BurstKBytes, s.Bandwidth.AccountingGBytes
 	return a
+}
+
+func (a *answers) isBridge() bool { return a.Mode == string(relay.ModeBridge) }
+
+func (a *answers) isWebTunnel() bool {
+	return a.isBridge() && a.BridgeTransport == string(relay.TransportWebTunnel)
 }
 
 func (a *answers) contact() string {
@@ -148,6 +202,8 @@ func (a *answers) setup() config.Setup {
 		Sandbox:     a.Sandbox,
 		MetricsPort: a.Metrics,
 		Instance:    strings.TrimSpace(a.Instance),
+
+		OfflineMasterKey: a.OfflineKey,
 	}
 	s.Exit = config.Exit{
 		ProviderPermission: a.ExitPermission,
@@ -155,10 +211,42 @@ func (a *answers) setup() config.Setup {
 		IPv6Exit:           a.IPv6Exit,
 		Unbound:            a.Unbound,
 		LockResolvConf:     a.LockResolv,
+		Notice:             a.ExitNotice,
+	}
+	if a.ExitPolicy == string(relay.PolicyCustom) {
+		s.Exit.CustomPolicy = relay.SplitPolicy(a.ExitCustom)
+	}
+	if a.isBridge() {
+		// Bridges run their transport outside tor's sandbox and never join
+		// a family.
+		s.Relay.Sandbox = false
+		s.Bridge = config.Bridge{Transport: a.BridgeTransport}
+		if a.isWebTunnel() {
+			s.Bridge.Domain = strings.ToLower(strings.TrimSpace(a.Domain))
+			s.Bridge.Path = strings.TrimSpace(a.WTPath)
+			s.Bridge.LocalPort = a.WTLocalPort
+			s.Bridge.Distribution = a.WTDist
+			s.Bridge.WebServer = a.WebServer
+			if a.WebServer == config.WebServerNginx {
+				s.Bridge.Certificate = a.Certificate
+				switch a.Certificate {
+				case config.CertExisting:
+					s.Bridge.CertFile, s.Bridge.KeyFile = strings.TrimSpace(a.CertFile), strings.TrimSpace(a.KeyFile)
+				case config.CertCertbot:
+					s.Bridge.CertbotEmail, s.Bridge.CertbotAgreeTOS = strings.TrimSpace(a.CertbotEmail), a.CertbotAgree
+				}
+			}
+		} else {
+			s.Bridge.Obfs4Port = atoi(a.Obfs4Port)
+			s.Bridge.Distribution = a.Obfs4Dist
+		}
 	}
 	s.Family = config.Family{
 		Mode: a.FamilyMode, KeyName: strings.TrimSpace(a.FamilyKey), ImportKey: strings.TrimSpace(a.FamilyImport),
 		FamilyID: strings.TrimSpace(a.FamilyID), Keep: append([]string(nil), a.Keep...),
+	}
+	if a.isBridge() {
+		s.Family = config.Family{Mode: "none", KeyName: s.Family.KeyName}
 	}
 	s.Bandwidth = config.BandwidthPlan{
 		Mode:             a.BandwidthMode,
@@ -262,15 +350,34 @@ var wizardSteps = []struct{ prefix, label string }{
 	{"contact", "Contact"},
 	{"network", "Network"},
 	{"exit", "Exit"},
+	{"bridge", "Bridge"},
 	{"family", "Family"},
 	{"bandwidth", "Bandwidth"},
 	{"system", "System"},
 }
 
+// stepShown reports whether the step with this prefix applies to the
+// answers: exit settings for exits, bridge settings for bridges, no family
+// for bridges and no network step for WebTunnel (nginx is the public side).
+func (w *wizard) stepShown(prefix string) bool {
+	a := w.ans
+	switch prefix {
+	case "exit":
+		return a.Mode == string(relay.ModeExit)
+	case "bridge":
+		return a.isBridge()
+	case "family":
+		return !a.isBridge()
+	case "network":
+		return !a.isWebTunnel()
+	}
+	return true
+}
+
 func (w *wizard) stepLabels() []string {
 	var out []string
 	for _, s := range wizardSteps {
-		if s.prefix == "exit" && w.ans.Mode != string(relay.ModeExit) {
+		if !w.stepShown(s.prefix) {
 			continue
 		}
 		out = append(out, s.label)
@@ -289,7 +396,7 @@ func (w *wizard) currentStep() int {
 	}
 	i := 0
 	for _, s := range wizardSteps {
-		if s.prefix == "exit" && w.ans.Mode != string(relay.ModeExit) {
+		if !w.stepShown(s.prefix) {
 			continue
 		}
 		if s.prefix == prefix {
@@ -352,9 +459,11 @@ func (w *wizard) build(app *App) *huh.Form {
 	}
 	relayFields = append(relayFields,
 		huh.NewSelect[string]().Key("relay.mode").Title("What kind of relay?").
+			Description("Guard/middle and exit relays are listed publicly. A bridge is unlisted: people in countries that block Tor use it to get in.").
 			Options(
 				huh.NewOption("Guard / middle relay — forwards traffic inside Tor (recommended)", string(relay.ModeGuard)),
 				huh.NewOption("Exit relay — connects Tor users to the Internet (needs provider permission)", string(relay.ModeExit)),
+				huh.NewOption("Bridge — helps censored users reach Tor (obfs4 or WebTunnel)", string(relay.ModeBridge)),
 			).Value(&a.Mode),
 		huh.NewInput().Key("relay.nickname").Title("Relay nickname").
 			Description("Public. 1–19 letters or digits; it doesn't have to be unique.").
@@ -420,6 +529,9 @@ func (w *wizard) build(app *App) *huh.Form {
 				if !relay.ValidPort(atoi(s)) {
 					return errors.New("a TCP port from 1 to 65535")
 				}
+				if a.isBridge() && atoi(s) == 9001 {
+					return errors.New("bridges should avoid 9001: censors scan for it (9443 or 443 work well)")
+				}
 				// Another relay instance on this server may hold it.
 				for _, o := range plan.OtherInstances(app.opt.Host, a.setup().Instance()) {
 					if slices.Contains(o.Doc.ORPortNumbers(), atoi(s)) {
@@ -431,7 +543,7 @@ func (w *wizard) build(app *App) *huh.Form {
 			huh.NewSelect[string]().Key("network.ipv6").Title("IPv6 ORPort").
 				Description("Only enable IPv6 if the server really has working IPv6.").
 				Options(ipv6Options()...).Value(&a.IPv6Choice),
-		),
+		).WithHideFunc(a.isWebTunnel),
 		huh.NewGroup(
 			huh.NewInput().Key("network.ipv6manual").Title("IPv6 address").
 				Placeholder("2001:db8::10").Value(&a.IPv6Manual).Validate(func(s string) error {
@@ -440,7 +552,7 @@ func (w *wizard) build(app *App) *huh.Form {
 				}
 				return nil
 			}),
-		).WithHideFunc(func() bool { return a.IPv6Choice != "manual" }),
+		).WithHideFunc(func() bool { return a.IPv6Choice != "manual" || a.isWebTunnel() }),
 
 		huh.NewGroup(
 			newConfirm().Key("exit.permission").
@@ -454,16 +566,112 @@ func (w *wizard) build(app *App) *huh.Form {
 				return nil
 			}),
 			huh.NewSelect[string]().Key("exit.policy").Title("Exit policy").
-				Options(
-					huh.NewOption("ReducedExitPolicy — common ports only (recommended)", string(relay.PolicyReduced)),
-					huh.NewOption("Tor's default exit policy — broader", string(relay.PolicyDefault)),
-				).Value(&a.ExitPolicy),
+				Options(exitPolicyOptions()...).Value(&a.ExitPolicy),
+		).WithHideFunc(func() bool { return !isExit() }),
+		huh.NewGroup(
+			huh.NewText().Key("exit.custom").Title("Custom exit policy").
+				Description("One rule per line, first match wins: accept|reject ADDR:PORT (*, *4, *6, private, 10.0.0.0/8, [2001:db8::]/32; ports 443, 6660-6669 or *). End with reject *:*.").
+				Value(&a.ExitCustom).Lines(8).Validate(validExitPolicyText),
+			huh.NewNote().Title("torrc").DescriptionFunc(func() string { return exitPolicyPreview(a) }, a),
+		).WithHideFunc(func() bool { return !isExit() || a.ExitPolicy != string(relay.PolicyCustom) }),
+		huh.NewGroup(
 			newConfirm().Key("exit.ipv6exit").Title("Allow IPv6 exit traffic?").
 				Description("Only used when an IPv6 ORPort is configured.").Value(&a.IPv6Exit),
+			newConfirm().Key("exit.notice").Title("Serve an exit notice page on port 80?").
+				Description("Tor's exit guidelines recommend a page explaining that this address is a Tor exit. tor serves it itself (DirPort 80, DirPortFrontPage); edit the page next to torrc afterwards.").
+				Value(&a.ExitNotice),
 			newConfirm().Key("exit.unbound").Title("Use a local Unbound resolver for exit DNS?").
 				Description("Tor recommends a local caching, DNSSEC-validating resolver instead of public DNS.").Value(&a.Unbound),
 			newConfirm().Key("exit.lock").Title("Lock /etc/resolv.conf with chattr +i afterwards?").Value(&a.LockResolv),
 		).WithHideFunc(func() bool { return !isExit() }),
+
+		huh.NewGroup(
+			huh.NewSelect[string]().Key("bridge.transport").Title("Bridge transport").
+				Description("Censors block bridges they can recognise. obfs4 makes the traffic look random; WebTunnel makes it look like visits to an ordinary HTTPS website.").
+				Options(
+					huh.NewOption("obfs4 — two open ports, nothing else needed (simplest)", string(relay.TransportObfs4)),
+					huh.NewOption("WebTunnel — behind a website; needs a domain and a TLS certificate", string(relay.TransportWebTunnel)),
+				).Value(&a.BridgeTransport),
+		).WithHideFunc(func() bool { return !a.isBridge() }),
+		huh.NewGroup(
+			huh.NewInput().Key("bridge.obfs4port").Title("obfs4 port").
+				Description("Must be reachable and differ from the ORPort; avoid 9001. Ports below 1024 (e.g. 443) pass more firewalls but need an extra capability.").
+				Value(&a.Obfs4Port).Validate(func(s string) error {
+				p := atoi(s)
+				switch {
+				case !relay.ValidPort(p):
+					return errors.New("a TCP port from 1 to 65535")
+				case p == atoi(a.ORPort):
+					return errors.New("use a different port than the ORPort")
+				case p == 9001:
+					return errors.New("avoid 9001: censors scan for it")
+				}
+				return portFree(app, a, p)
+			}),
+			huh.NewSelect[string]().Key("bridge.obfs4dist").Title("How should Tor hand the bridge out?").
+				Options(distributionOptions(false)...).Value(&a.Obfs4Dist),
+		).WithHideFunc(func() bool { return !a.isBridge() || a.isWebTunnel() }),
+		huh.NewGroup(
+			huh.NewInput().Key("bridge.domain").Title("Domain for the WebTunnel website").
+				Description("A DNS name whose A/AAAA records point at this server, e.g. bridge.example.org.").
+				Placeholder("bridge.example.org").Value(&a.Domain).Validate(func(s string) error {
+				if !relay.ValidDomain(strings.ToLower(strings.TrimSpace(s))) {
+					return errors.New("a DNS name such as bridge.example.org")
+				}
+				return nil
+			}),
+			huh.NewInput().Key("bridge.path").Title("Secret path").
+				Description("Only clients with this path reach the bridge; generated at random. Keep it secret.").
+				Value(&a.WTPath).Validate(func(s string) error {
+				if !relay.ValidWebTunnelPath(strings.TrimSpace(s)) {
+					return errors.New("8–128 letters, digits, '.', '_', '~' or '-'")
+				}
+				return nil
+			}),
+			huh.NewSelect[string]().Key("bridge.webserver").Title("Web server").
+				Options(
+					huh.NewOption("Install and configure nginx for me", config.WebServerNginx),
+					huh.NewOption("I run my own web server (show me the snippet)", config.WebServerManual),
+				).Value(&a.WebServer),
+			huh.NewSelect[string]().Key("bridge.wtdist").Title("How should Tor hand the bridge out?").
+				Description("WebTunnel bridges are only given out through the https distributor (bridges.torproject.org).").
+				Options(distributionOptions(true)...).Value(&a.WTDist),
+		).WithHideFunc(func() bool { return !a.isWebTunnel() }),
+		huh.NewGroup(
+			huh.NewSelect[string]().Key("bridge.cert").Title("TLS certificate for nginx").
+				Options(
+					huh.NewOption("Request one from Let's Encrypt with certbot", config.CertCertbot),
+					huh.NewOption("Use a certificate I already have", config.CertExisting),
+				).Value(&a.Certificate),
+		).WithHideFunc(func() bool { return !a.isWebTunnel() || a.WebServer != config.WebServerNginx }),
+		huh.NewGroup(
+			huh.NewInput().Key("bridge.certfile").Title("Certificate chain (PEM)").Placeholder("/etc/ssl/certs/bridge.pem").
+				Value(&a.CertFile).Validate(func(s string) error { return existingFile(app, s) }),
+			huh.NewInput().Key("bridge.keyfile").Title("Private key (PEM)").Placeholder("/etc/ssl/private/bridge.key").
+				Value(&a.KeyFile).Validate(func(s string) error { return existingFile(app, s) }),
+		).WithHideFunc(func() bool {
+			return !a.isWebTunnel() || a.WebServer != config.WebServerNginx || a.Certificate != config.CertExisting
+		}),
+		huh.NewGroup(
+			huh.NewInput().Key("bridge.certbotemail").Title("Email for Let's Encrypt (optional)").
+				Description("Expiry and account notices. Leave it empty to register without one.").
+				Value(&a.CertbotEmail).Validate(func(s string) error {
+				if s = strings.TrimSpace(s); s != "" && !relay.ValidEmail(s) {
+					return errors.New("an email address, or empty")
+				}
+				return nil
+			}),
+			newConfirm().Key("bridge.certbotagree").Title("Let certbot request the certificate and accept the Let's Encrypt Subscriber Agreement for you?").
+				Description("certbot certonly --nginx contacts Let's Encrypt during apply; the domain must already point here and port 80 must be reachable. Terms: https://letsencrypt.org/repository/").
+				Affirmative("Yes, I agree").Negative("No").Value(&a.CertbotAgree).Validate(func(v bool) error {
+				if !v {
+					return errors.New("without agreeing, go back (shift+tab) and use an existing certificate")
+				}
+				return nil
+			}),
+		).WithHideFunc(func() bool {
+			return !a.isWebTunnel() || a.WebServer != config.WebServerNginx || a.Certificate != config.CertCertbot
+		}),
 
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("family.mode").Title("Relay family").
@@ -473,7 +681,7 @@ func (w *wizard) build(app *App) *huh.Form {
 					huh.NewOption("Create a new family key — first relay of a family", "generate"),
 					huh.NewOption("Import a family key copied from another relay", "import"),
 				).Value(&a.FamilyMode),
-		),
+		).WithHideFunc(a.isBridge),
 		huh.NewGroup(
 			huh.NewInput().Key("family.key").Title("Family key name").Value(&a.FamilyKey).
 				Validate(func(s string) error {
@@ -494,7 +702,7 @@ func (w *wizard) build(app *App) *huh.Form {
 					}
 					return nil
 				}),
-		).WithHideFunc(func() bool { return a.FamilyMode != "generate" }),
+		).WithHideFunc(func() bool { return a.FamilyMode != "generate" || a.isBridge() }),
 		huh.NewGroup(
 			huh.NewInput().Key("family.import").Title("Path to NAME.secret_family_key").
 				Placeholder("/root/relay-family.secret_family_key").Value(&a.FamilyImport).
@@ -520,7 +728,7 @@ func (w *wizard) build(app *App) *huh.Form {
 				}
 				return nil
 			}),
-		).WithHideFunc(func() bool { return a.FamilyMode != "import" }),
+		).WithHideFunc(func() bool { return a.FamilyMode != "import" || a.isBridge() }),
 
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("bandwidth.mode").Title("Bandwidth").
@@ -613,9 +821,83 @@ func (w *wizard) build(app *App) *huh.Form {
 		huh.NewGroup(
 			newConfirm().Key("system.sandbox").Title("Enable Tor's syscall sandbox (Sandbox 1)?").
 				Description("Extra hardening on Linux; supported on amd64 and arm64.").Value(&a.Sandbox),
-		),
+		).WithHideFunc(a.isBridge), // tor refuses pluggable transports with Sandbox 1
 	).WithTheme(app.theme.Form()).WithShowHelp(false).WithShowErrors(true)
 	return f
+}
+
+// exitPolicyOptions lists the exit policy choices.
+func exitPolicyOptions() []huh.Option[string] {
+	return []huh.Option[string]{
+		huh.NewOption("ReducedExitPolicy — tor's list of ~70 common services (recommended)", string(relay.PolicyReduced)),
+		huh.NewOption("Web only — ports 80 and 443", string(relay.PolicyWeb)),
+		huh.NewOption("Tor's default exit policy — everything but a few abuse-prone ports", string(relay.PolicyDefault)),
+		huh.NewOption("Custom — write your own accept/reject rules", string(relay.PolicyCustom)),
+	}
+}
+
+// validExitPolicyText validates the custom policy editor's text.
+func validExitPolicyText(s string) error {
+	_, err := relay.NormalizePolicy(relay.SplitPolicy(s))
+	return err
+}
+
+// exitPolicyPreview shows the torrc lines a custom policy produces.
+func exitPolicyPreview(a *answers) string {
+	norm, err := relay.NormalizePolicy(relay.SplitPolicy(a.ExitCustom))
+	if err != nil {
+		return "…"
+	}
+	lines := make([]string, len(norm))
+	for i, e := range norm {
+		lines[i] = "ExitPolicy " + e
+	}
+	return strings.Join(lines, "\n")
+}
+
+// distributionOptions lists the BridgeDistribution choices; WebTunnel puts
+// https first.
+func distributionOptions(webTunnel bool) []huh.Option[string] {
+	labels := map[string]string{
+		"any":      "Let the Tor Project decide (any)",
+		"https":    "bridges.torproject.org website (https)",
+		"email":    "Email autoresponder (email)",
+		"settings": "Tor Browser's built-in request (settings)",
+		"telegram": "Telegram bot (telegram)",
+		"none":     "Nobody — I share the bridge line myself (none)",
+	}
+	order := relay.Distributions
+	if webTunnel {
+		order = []string{"https", "none", "any", "email", "settings", "telegram"}
+	}
+	opts := make([]huh.Option[string], 0, len(order))
+	for _, d := range order {
+		opts = append(opts, huh.NewOption(labels[d], d))
+	}
+	return opts
+}
+
+// portFree reports an error when another relay instance on this server
+// already uses port p.
+func portFree(app *App, a *answers, p int) error {
+	for _, o := range plan.OtherInstances(app.opt.Host, a.setup().Instance()) {
+		if slices.Contains(o.Doc.ORPortNumbers(), p) || slices.Contains(o.Doc.BridgePorts(), p) {
+			return fmt.Errorf("tor instance %s already uses port %d", o.Name, p)
+		}
+	}
+	return nil
+}
+
+// existingFile checks that an absolute path names an existing file.
+func existingFile(app *App, s string) error {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "/") {
+		return errors.New("an absolute path")
+	}
+	if _, err := app.opt.Host.Stat(s); err != nil {
+		return errors.New("no such file on this server")
+	}
+	return nil
 }
 
 func (w *wizard) init(a *App) tea.Cmd {

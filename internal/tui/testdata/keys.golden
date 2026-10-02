@@ -1,0 +1,44 @@
+ ◆ tor-relay-setup vtest                                                                             old-host
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Identity keys · ed25519 master and signing keys
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Status                                                                                                   │
+│ Identity          QpJApfAfoAk4z/5dtmI+JDu4PrrlaWv3URaAZeMrLxM                                            │
+│ Master key        on this server                                                                         │
+│ OfflineMasterKey  no                                                                                     │
+│ Signing key       ✓ until 2026-11-01 (30 days)                                                           │
+│ Key directory     /var/lib/tor/keys                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Actions                                                                                                  │
+│  o  Take the master key offline                                                                          │
+│     Set OfflineMasterKey 1 and export the key for download                                               │
+│  x  Remove the master key from this server                                                               │
+│  r  Renew the signing key here                                                                           │
+│  i  Install an uploaded signing key                                                                      │
+│  h  How to renew offline                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ How offline keys work                                                                                    │
+│ A relay's identity is its ed25519 master key. With an offline master key,                                │
+│ that key lives on a machine you control (an encrypted USB stick, an offline                              │
+│ laptop) and the relay only holds a medium-term signing key and certificate,                              │
+│ signed by the master key and valid for SigningKeyLifetime (default 30 days).                             │
+│ If the server is compromised, the attacker gets a signing key that expires,                              │
+│ not your relay's identity. The price: you renew the signing key before it                                │
+│ expires, or the relay stops.                                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+ ↑/↓ select  ·  enter run  ·  esc back

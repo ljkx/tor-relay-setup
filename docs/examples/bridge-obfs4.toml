@@ -1,0 +1,43 @@
+# Example tor-relay-setup configuration for an obfs4 bridge.
+#
+#   sudo tor-relay-setup apply --config bridge-obfs4.toml
+#
+# A bridge is an unlisted relay that people in censored networks use to
+# reach Tor. obfs4 needs two reachable TCP ports: the ORPort and the obfs4
+# port. Tor's guide asks bridges to avoid 9001, which censors scan for:
+# https://community.torproject.org/relay/setup/bridge/debian-ubuntu/
+#
+# The transport is lyrebird where Debian packages it (forky and later), else
+# obfs4proxy (bookworm, trixie, Ubuntu). After the first start the console's
+# "Bridge line" shows the line to share; Tor Metrics lists the bridge by its
+# hashed fingerprint after about three hours.
+
+[relay]
+nickname = "ExampleBridge"
+contact = "email:ops[]example.org ciissversion:3"
+or_port = 9443
+mode = "bridge"
+ipv6 = ""                 # optional IPv6 ORPort
+sandbox = false           # required: tor refuses pluggable transports with Sandbox 1
+metrics_port = false
+
+[bridge]
+transport = "obfs4"
+obfs4_port = 8443         # must differ from or_port; below 1024 (e.g. 443) gets CAP_NET_BIND_SERVICE
+                          # via setcap and NoNewPrivileges=no for the tor unit, as Tor's guide describes
+distribution = "any"      # any | https | email | settings | telegram | none (you share the line yourself)
+
+[family]
+mode = "none"             # bridges never join a family: it would link them to your public relays
+
+[bandwidth]
+mode = "steady"
+monthly_quota = "10TB"
+headroom_percent = 10
+billing = "sum"
+
+[system]
+unattended_upgrades = true
+nyx = true
+firewall = "auto"         # opens the ORPort and the obfs4 port
+enable_ufw = true

@@ -107,6 +107,23 @@ func Named(name string) (Instance, error) {
 // counts as default).
 func (i Instance) IsDefault() bool { return i.Name == "" || i.Name == DefaultInstanceName }
 
+// ExitNoticePath is where i's exit notice page lives: next to its torrc,
+// where Debian's AppArmor profile for tor allows reads (/etc/tor/** r).
+func (i Instance) ExitNoticePath() string {
+	return filepath.Dir(i.OrDefault().TorrcPath) + "/tor-exit-notice.html"
+}
+
+// WebTunnelSite is the nginx site this tool writes for i's WebTunnel bridge,
+// and WebTunnelSiteLink the sites-enabled link to it (Debian's nginx layout).
+func (i Instance) WebTunnelSite() string {
+	return "/etc/nginx/sites-available/tor-webtunnel-" + i.OrDefault().Name
+}
+
+// WebTunnelSiteLink enables WebTunnelSite.
+func (i Instance) WebTunnelSiteLink() string {
+	return "/etc/nginx/sites-enabled/tor-webtunnel-" + i.OrDefault().Name
+}
+
 // OrDefault returns i, or the default instance for the zero value.
 func (i Instance) OrDefault() Instance {
 	if i.TorrcPath == "" {

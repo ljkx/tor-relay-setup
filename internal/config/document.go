@@ -30,16 +30,32 @@ func FromDocument(doc *relay.Document) Setup {
 	if flag(doc, "ExitRelay") {
 		s.Relay.Mode = string(relay.ModeExit)
 		s.Exit.ProviderPermission = true // an exit is already running
-		s.Exit.Policy = string(relay.PolicyDefault)
-		if flag(doc, "ReducedExitPolicy") {
-			s.Exit.Policy = string(relay.PolicyReduced)
-		}
+		policy, custom := doc.ExitPolicySettings()
+		s.Exit.Policy, s.Exit.CustomPolicy = string(policy), custom
 		s.Exit.IPv6Exit = flag(doc, "IPv6Exit")
+		s.Exit.Notice = doc.ExitNotice() != ""
 	}
 	// Tor's default is Sandbox 0, and Render omits the line when it is off.
 	s.Relay.Sandbox = flag(doc, "Sandbox")
 	_, s.Relay.MetricsPort = doc.Get("MetricsPort")
+	s.Relay.OfflineMasterKey = doc.OfflineMasterKey()
 	s.Family.Keep = doc.FamilyIDs()
+	if b, ok := doc.BridgeSettings(); ok {
+		s.Relay.Mode = string(relay.ModeBridge)
+		s.Bridge = Bridge{Transport: string(b.Transport), Distribution: b.Distribution}
+		switch b.Transport {
+		case relay.TransportWebTunnel:
+			s.Bridge.Domain, s.Bridge.Path, _ = relay.SplitWebTunnelURL(b.URL)
+			if b.Port != relay.DefaultWebTunnelPort {
+				s.Bridge.LocalPort = b.Port
+			}
+			// The web server is not in torrc: plan.ReadWebServer fills it in.
+			s.Bridge.WebServer = WebServerManual
+		default:
+			s.Bridge.Obfs4Port = b.Port
+		}
+		s.Family.Keep = nil // a bridge never joins a family
+	}
 
 	s.Bandwidth = bandwidthFrom(doc)
 	return s

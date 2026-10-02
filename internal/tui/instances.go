@@ -9,6 +9,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/family"
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/plan"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/status"
 )
@@ -46,6 +47,7 @@ func instanceSetup(h host.Host, inst relay.Instance) (config.Setup, bool) {
 	if !inst.IsDefault() {
 		s.Relay.Instance = inst.Name
 	}
+	plan.ReadWebServer(h, &s)
 	return s, true
 }
 
@@ -71,6 +73,7 @@ func NewInstanceSetup(h host.Host, from relay.Instance) config.Setup {
 	var used []int
 	for _, c := range configs {
 		used = append(used, c.Doc.ORPortNumbers()...)
+		used = append(used, c.Doc.BridgePorts()...)
 		if p := c.Doc.MetricsPortNumber(); p > 0 {
 			used = append(used, p)
 		}
@@ -93,8 +96,17 @@ func NewInstanceSetup(h host.Host, from relay.Instance) config.Setup {
 	case b.Mode == string(relay.BandwidthManual) && b.AccountingGBytes == 0:
 		s.Bandwidth = b
 	}
-	if key, ok := familyKeyOf(h, *base); ok {
+	if key, ok := familyKeyOf(h, *base); ok && !s.IsBridge() {
 		s.Family.Mode, s.Family.KeyName = "generate", key.Name
+	}
+	if s.IsBridge() {
+		// Another obfs4 bridge on free ports (a WebTunnel bridge would need
+		// its own domain, so obfs4 is the suggestion either way).
+		s.Bridge = config.Bridge{Transport: string(relay.TransportObfs4), Distribution: from0.Bridge.Distribution}
+		if from0.IsWebTunnel() {
+			s.Relay.ORPort = relay.NextFreePort(config.DefaultBridgePort, used)
+		}
+		s.Bridge.Obfs4Port = relay.NextFreePort(config.DefaultObfs4Port, append(used, s.Relay.ORPort))
 	}
 	return s
 }

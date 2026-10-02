@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/family"
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	idkeys "github.com/ljkx/tor-relay-setup/internal/keys"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 )
 
@@ -20,16 +22,47 @@ func OtherInstances(h host.Host, inst relay.Instance) []relay.InstanceConfig {
 	return slices.DeleteFunc(all, func(c relay.InstanceConfig) bool { return c.Name == inst.Name })
 }
 
-// usedPorts lists the ORPorts and MetricsPorts of instances.
+// usedPorts lists the ORPorts, MetricsPorts, transport ports and DirPorts
+// of instances.
 func usedPorts(instances []relay.InstanceConfig) []int {
 	var used []int
 	for _, o := range instances {
-		used = append(used, o.Doc.ORPortNumbers()...)
-		if p := o.Doc.MetricsPortNumber(); p > 0 {
-			used = append(used, p)
-		}
+		used = append(used, instancePorts(o.Doc)...)
 	}
 	return used
+}
+
+// instancePorts lists every TCP port a torrc listens on.
+func instancePorts(doc *relay.Document) []int {
+	ports := append(doc.ORPortNumbers(), doc.BridgePorts()...)
+	ports = append(ports, doc.DirPortNumbers()...)
+	if p := doc.MetricsPortNumber(); p > 0 {
+		ports = append(ports, p)
+	}
+	return ports
+}
+
+// setupPorts lists the ports s needs on this host, each with what it is.
+func setupPorts(s config.Setup) map[int]string {
+	ports := map[int]string{}
+	if !s.IsWebTunnel() {
+		ports[s.Relay.ORPort] = "ORPort"
+	}
+	switch {
+	case s.IsWebTunnel():
+		ports[s.WebTunnelPort()] = "WebTunnel port"
+		if s.ManagedNginx() {
+			ports[443] = "nginx HTTPS port"
+			if s.UsesCertbot() {
+				ports[80] = "nginx HTTP port"
+			}
+		}
+	case s.IsBridge():
+		ports[s.Bridge.Obfs4Port] = "obfs4 port"
+	case s.IsExit() && s.Exit.Notice:
+		ports[relay.ExitNoticePort] = "exit notice port"
+	}
+	return ports
 }
 
 // ResolveMetricsAddress picks the MetricsPort address for s on this host:
@@ -58,13 +91,24 @@ func Conflicts(s config.Setup, others []relay.InstanceConfig) error {
 	if s.Relay.MetricsPort {
 		metrics = relay.PortNumber(s.RelayConfig(nil).MetricsPort)
 	}
+	mine := setupPorts(s)
+	keys := slices.Sorted(maps.Keys(mine))
 	for _, o := range others {
-		ors := o.Doc.ORPortNumbers()
-		if slices.Contains(ors, s.Relay.ORPort) {
-			problems = append(problems, fmt.Sprintf("ORPort %d is already used by tor instance %s (%s)", s.Relay.ORPort, o.Name, o.TorrcPath))
+		theirs := instancePorts(o.Doc)
+		for _, p := range keys {
+			if slices.Contains(theirs, p) {
+				problems = append(problems, fmt.Sprintf("%s %d is already used by tor instance %s (%s)", mine[p], p, o.Name, o.TorrcPath))
+			}
 		}
-		if metrics > 0 && (slices.Contains(ors, metrics) || o.Doc.MetricsPortNumber() == metrics) {
+		if metrics > 0 && slices.Contains(theirs, metrics) {
 			problems = append(problems, fmt.Sprintf("MetricsPort %d is already used by tor instance %s (%s)", metrics, o.Name, o.TorrcPath))
+		}
+		if s.IsWebTunnel() {
+			if b, ok := o.Doc.BridgeSettings(); ok {
+				if d, _, _ := relay.SplitWebTunnelURL(b.URL); d != "" && strings.EqualFold(d, s.Bridge.Domain) {
+					problems = append(problems, fmt.Sprintf("tor instance %s already runs a WebTunnel bridge on %s; use another domain", o.Name, d))
+				}
+			}
 		}
 	}
 	if len(problems) == 0 {
@@ -168,6 +212,21 @@ func instanceStep(inst relay.Instance) Step {
 			return nil
 		},
 	}
+}
+
+// offlineKeyGone reports a relay whose ed25519 master key has been taken
+// offline: the key directory holds the master public key but no secret key.
+func offlineKeyGone(h host.Host, inst relay.Instance) bool {
+	inst = inst.OrDefault()
+	if _, err := h.Stat(inst.KeyDir + "/" + idkeys.MasterPublic); err != nil {
+		return false
+	}
+	for _, name := range []string{idkeys.MasterSecret, idkeys.MasterSecretEncrypted} {
+		if _, err := h.Stat(inst.KeyDir + "/" + name); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // instanceLabel is "" for the default instance (keeping single-relay state

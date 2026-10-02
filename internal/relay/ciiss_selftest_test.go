@@ -55,14 +55,14 @@ func TestParseSelfTest(t *testing.T) {
 		{"empty", "", SelfTest{}},
 		{"noise only", noise, SelfTest{}},
 		{"legacy", noise + legacy, SelfTest{IPv4: true}},
-		{"modern v4", modern4, SelfTest{IPv4: true}},
+		{"modern v4", modern4, SelfTest{IPv4: true, Address: "203.0.113.5"}},
 		{"modern v6 only", modern6, SelfTest{IPv6: true}},
-		{"both", modern4 + noise + modern6, SelfTest{IPv4: true, IPv6: true}},
+		{"both", modern4 + noise + modern6, SelfTest{IPv4: true, IPv6: true, Address: "203.0.113.5"}},
 		{"new failure", failNew, SelfTest{Failed: true}},
 		{"old failure", failOld2, SelfTest{Failed: true}},
 		{"old failure with address", failOld, SelfTest{Failed: true}},
 		{"v6 ok, v4 failed", modern6 + failNew, SelfTest{IPv6: true, Failed: true}},
-		{"no trailing newline", "x Self-testing indicates your ORPort 198.51.100.1:443 is reachable from the outside. Excellent.", SelfTest{IPv4: true}},
+		{"no trailing newline", "x Self-testing indicates your ORPort 198.51.100.1:443 is reachable from the outside. Excellent.", SelfTest{IPv4: true, Address: "198.51.100.1"}},
 		{"truncated notice", "Self-testing indicates your ORPort 198.51.100.1:443 is reachable from the outside.", SelfTest{}},
 	}
 	for _, tt := range tests {

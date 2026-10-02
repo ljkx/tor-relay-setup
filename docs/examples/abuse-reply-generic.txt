@@ -1,0 +1,55 @@
+Subject: Re: [ORIGINAL SUBJECT] - [IP ADDRESS] is a Tor exit relay
+
+# Reply to a general abuse report (spam, scanning, brute force, scraping,
+# denial of service, hacking attempts) about your exit relay.
+#
+# Written for tor-relay-setup in our own words, following the approach of the
+# Tor Project's abuse templates: explain Tor, point to fixes that work for
+# all traffic, and offer blocking Tor as a last resort.
+#   https://community.torproject.org/relay/community-resources/tor-abuse-templates/
+#   https://community.torproject.org/relay/community-resources/tor-exit-guidelines/
+# This is not legal advice. Keep it friendly and short: most reporters are
+# automated systems or busy administrators. Lines starting with '#' are notes
+# for you; delete them before sending.
+
+Hello,
+
+Thank you for your report about [IP ADDRESS] at [TIME AND TIME ZONE].
+
+That address runs a Tor exit relay, [NICKNAME], operated by [YOUR NAME OR
+ORGANISATION] as a volunteer. Tor is a free, open network that helps
+journalists, human rights workers, companies and many ordinary people
+protect their privacy online. Traffic leaving a Tor exit was relayed for
+someone else: it did not originate from this server, and I cannot see who
+sent it. The relay keeps no logs that could identify a user.
+
+Abuse through Tor is rare compared with its legitimate use, and the same
+behaviour comes from the rest of the Internet as well. Measures that protect
+your service from everyone work best, for example:
+
+# Keep the paragraph that matches the report; delete the others.
+- Spam or abusive posts: rate limits, CAPTCHAs or moderation for new
+  accounts, and spam filters on content rather than on addresses.
+- Login or SSH brute force: rate limiting (fail2ban or similar), strong
+  passwords or keys, and two-factor authentication.
+- Scanning or exploitation attempts: keeping the software up to date and
+  monitoring the service; these requests also arrive from many non-Tor
+  addresses.
+- Scraping or denial of service: request rate limits and caching at the web
+  server or a reverse proxy.
+
+If you still prefer to treat Tor traffic differently, the Tor Project
+publishes the current list of exit addresses, which you can use to block or
+flag requests from Tor:
+https://check.torproject.org/torbulkexitlist
+
+# Optional, if you can and want to change your exit policy:
+I can also stop this relay from connecting to [DESTINATION IP / RANGE] on
+[PORT] if you send me the addresses that should be excluded.
+
+You can verify that [IP ADDRESS] was a Tor exit at that time with
+https://metrics.torproject.org/exonerator.html
+
+Best regards,
+[YOUR NAME]
+[CONTACT EMAIL]

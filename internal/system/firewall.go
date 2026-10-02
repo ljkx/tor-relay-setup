@@ -109,13 +109,47 @@ func NFTRuleExists(ctx context.Context, h host.Host, orPort int) bool {
 // installUFW means the caller installs ufw (via apt) before running these
 // commands; fw is then treated as a freshly installed, inactive ufw.
 func FirewallCommands(fw Firewall, orPort int, sshPorts []int, enableUFW, installUFW bool) []host.Command {
+	return FirewallCommandsFor(fw, []Port{{Number: orPort, Label: ORPortLabel}}, sshPorts, enableUFW, installUFW)
+}
+
+// ORPortLabel is the rule comment of the ORPort.
+const ORPortLabel = "Tor relay ORPort"
+
+// Port is a TCP port to open, with the comment its rule carries.
+type Port struct {
+	Number int
+	Label  string
+}
+
+// comment is the nftables rule comment for p: "Tor relay ORPort 9001".
+func (p Port) comment() string {
+	if p.Label == "" || p.Label == ORPortLabel {
+		return nftComment(p.Number)
+	}
+	return p.Label + " " + strconv.Itoa(p.Number)
+}
+
+// FirewallCommandsFor is FirewallCommands for several ports (a bridge's
+// ORPort and obfs4 port, an exit notice, a WebTunnel web server), in order
+// and without duplicates.
+func FirewallCommandsFor(fw Firewall, ports []Port, sshPorts []int, enableUFW, installUFW bool) []host.Command {
 	if installUFW {
 		fw = Firewall{Kind: KindUFW, Detail: DetailInactive}
 	}
-	port := strconv.Itoa(orPort) + "/tcp"
 	var cmds []host.Command
 	add := func(name string, args ...string) {
 		cmds = append(cmds, host.Command{Name: name, Args: args, Mutates: true})
+	}
+	seen := map[int]bool{}
+	var open []Port
+	for _, p := range ports {
+		if p.Number > 0 && !seen[p.Number] {
+			seen[p.Number] = true
+			if p.Label == "" {
+				p.Label = ORPortLabel
+			}
+			open = append(open, p)
+		}
 	}
 
 	switch fw.Kind {
@@ -128,19 +162,25 @@ func FirewallCommands(fw Firewall, orPort int, sshPorts []int, enableUFW, instal
 				add("ufw", "allow", strconv.Itoa(p)+"/tcp", "comment", "SSH")
 			}
 		}
-		add("ufw", "allow", port, "comment", "Tor relay ORPort")
+		for _, p := range open {
+			add("ufw", "allow", strconv.Itoa(p.Number)+"/tcp", "comment", p.Label)
+		}
 		if enableUFW && !fw.Active {
 			add("ufw", "--force", "enable")
 		}
 	case KindFirewalld:
 		if fw.Active {
-			add("firewall-cmd", "--permanent", "--add-port="+port)
+			for _, p := range open {
+				add("firewall-cmd", "--permanent", "--add-port="+strconv.Itoa(p.Number)+"/tcp")
+			}
 			add("firewall-cmd", "--reload")
 		}
 	case KindNFTables:
 		if fw.Detail == DetailNFTChainFound {
-			add("nft", "add", "rule", "inet", "filter", "input", "tcp", "dport", strconv.Itoa(orPort),
-				"accept", "comment", `"`+nftComment(orPort)+`"`)
+			for _, p := range open {
+				add("nft", "add", "rule", "inet", "filter", "input", "tcp", "dport", strconv.Itoa(p.Number),
+					"accept", "comment", `"`+p.comment()+`"`)
+			}
 		}
 	}
 	return cmds

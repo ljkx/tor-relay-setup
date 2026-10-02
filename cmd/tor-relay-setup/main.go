@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -66,6 +67,17 @@ Usage:
   tor-relay-setup alert run|test|install|uninstall
                                             notify about problems (ntfy, webhook, email, command);
                                             install adds a systemd timer (see alert --help)
+  tor-relay-setup proof [--instance NAME|--all] [--check]
+                                            ContactInfo (CIISS) proof files to publish on your website;
+                                            --check fetches the published copies over HTTPS
+  tor-relay-setup keys status|offline|renew [--instance NAME]
+                                            ed25519 identity keys: signing key expiry, offline master key
+  tor-relay-setup keys offline [--remove-master]
+                                            set OfflineMasterKey 1 and export the master key; then remove
+                                            it from the server once you typed the SHA-256 of your copy
+  tor-relay-setup keys renew [--master DIR | --from DIR] [--lifetime "30 days"]
+                                            new signing key: from a master key in DIR, or install one made
+                                            with tor --keygen elsewhere; without flags: how to renew offline
   tor-relay-setup uninstall [--yes]         remove this tool's state, logs and alert timer, then offer
                                             to remove the program itself (never Tor or its keys)
   tor-relay-setup self-update [--check]     install the newest release, verified like install.sh;
@@ -84,10 +96,15 @@ Flags:
   --inventory FILE fleet inventory for apply and fleet (fleet: default fleet.toml)
   --parallel N     apply --inventory: servers applied at once after the family host
   --only LIST      apply --inventory, fleet: only these hosts or nicknames (comma-separated)
-  --check          self-update: only report whether a newer release exists
-  --instance NAME  the tor instance for status, console, setup, apply and tor (overrides
-                   relay.instance); "default" is /etc/tor/torrc
-  --all            status: report every relay instance on this server
+  --check          self-update: only report whether a newer release exists;
+                   proof: fetch the published proof files
+  --instance NAME  the tor instance for status, console, setup, apply, tor, proof and keys
+                   (overrides relay.instance); "default" is /etc/tor/torrc
+  --all            status, proof: every relay instance on this server
+  --remove-master  keys offline: remove the master key (asks for the SHA-256 of your copy)
+  --master DIR     keys renew: directory with ed25519_master_id_secret_key (unencrypted)
+  --from DIR       keys renew: directory with an uploaded signing key and certificate
+  --lifetime TIME  keys renew --master: SigningKeyLifetime, e.g. "30 days" (tor's default)
 
 Several relays on one server (Debian tor instances):
   Each extra relay is a tor instance: tor-instance-create NAME, /etc/tor/instances/NAME/torrc,
@@ -169,6 +186,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	check := fs.Bool("check", false, "")
 	instanceName := fs.String("instance", "", "")
 	all := fs.Bool("all", false, "")
+	removeMaster := fs.Bool("remove-master", false, "")
+	masterDir := fs.String("master", "", "")
+	fromDir := fs.String("from", "", "")
+	lifetime := fs.String("lifetime", "", "")
 	help := fs.Bool("help", false, "")
 	fs.BoolVar(help, "h", false, "")
 	showVersion := fs.Bool("version", false, "")
@@ -185,7 +206,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	if (cmd == "tor" || cmd == "fleet") && fs.NArg() > 0 {
+	if (cmd == "tor" || cmd == "fleet" || cmd == "keys") && fs.NArg() > 0 {
 		sub = fs.Arg(0)
 		if err := fs.Parse(fs.Args()[1:]); err != nil {
 			return 2
@@ -213,7 +234,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if msg := checkFlagUse(cmd, sub, flagUse{
 		hosts: len(hosts) > 0, inventory: *inventory != "", config: *cfgPath != "", parallel: *parallel,
 		only: *only != "", keepGoing: *keepGoing, remoteApply: remoteApply, rolling: rolling,
-		instance: *instanceName != "", all: *all,
+		instance: *instanceName != "", all: *all, check: *check,
+		removeMaster: *removeMaster, renewFlags: *masterDir != "" || *fromDir != "" || *lifetime != "",
 	}); msg != "" {
 		fmt.Fprintln(stderr, msg)
 		return 2
@@ -261,7 +283,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	// A remote apply and the fleet commands need no local root: the remote
 	// side uses sudo.
-	localChange := cmd == "" || cmd == "setup" || (cmd == "apply" && !remoteApply) || cmd == "console" || cmd == "uninstall" || cmd == "tor"
+	keysChange := cmd == "keys" && (sub == "offline" || (sub == "renew" && (*masterDir != "" || *fromDir != "")))
+	localChange := cmd == "" || cmd == "setup" || (cmd == "apply" && !remoteApply) || cmd == "console" || cmd == "uninstall" || cmd == "tor" || keysChange
 	if !*dryRun && os.Geteuid() != 0 && localChange {
 		fmt.Fprintln(stderr, "tor-relay-setup changes system configuration and must run as root.")
 		fmt.Fprintln(stderr, "Try: sudo tor-relay-setup   (or add --dry-run to look around without root)")
@@ -326,6 +349,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			Yes: *yes, DryRun: *dryRun, KeepGoing: *keepGoing, Interactive: interactive,
 			Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout, Err: stderr,
 			Onionoo: dir, Local: h, Version: buildVersion(),
+		})
+	case "proof":
+		err = proofCmd(h, proofRequest{Instance: *instanceName, All: *all, Check: *check}, stdout)
+	case "keys":
+		if *dryRun {
+			local.Observe = func(e host.Event) {
+				if e.Dry {
+					fmt.Fprintln(stdout, "  would: "+e.Text)
+				}
+			}
+		}
+		err = keysCmd(h, keysRequest{
+			Action: sub, Instance: *instanceName, RemoveMaster: *removeMaster,
+			Master: *masterDir, From: *fromDir, Lifetime: *lifetime, In: stdin, Out: stdout,
 		})
 	case "uninstall":
 		err = uninstall(context.Background(), h, uninstallOptions{Yes: *yes, Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout})
@@ -426,7 +463,15 @@ func collectReports(ctx context.Context, h host.Host, dir onionoo.Client, instan
 	for i, inst := range instances {
 		wg.Go(func() {
 			r := status.Collect(ctx, h, status.Options{Instance: inst})
-			if r.Relay.Fingerprint != "" {
+			switch {
+			case r.Relay.Fingerprint != "" && r.Relay.Bridge:
+				// By hashed fingerprint only: a bridge's own never leaves the host.
+				b, err := status.BridgeDirectory(ctx, dir, r.Relay.Fingerprint)
+				r.BridgeDirectory = b
+				if err != nil {
+					r.DirectoryError = err.Error()
+				}
+			case r.Relay.Fingerprint != "":
 				d, err := status.Directory(ctx, dir, r.Relay.Fingerprint)
 				r.Directory = d
 				if err != nil {
@@ -509,7 +554,8 @@ type flagUse struct {
 	hosts, inventory, config, only, keepGoing bool
 	parallel                                  int
 	remoteApply, rolling                      bool
-	instance, all                             bool
+	instance, all, check                      bool
+	removeMaster, renewFlags                  bool // keys offline / keys renew flags
 }
 
 // checkFlagUse rejects flags and subcommands that do not fit the command.
@@ -535,12 +581,22 @@ func checkFlagUse(cmd, sub string, u flagUse) string {
 		return fmt.Sprintf("unknown fleet command %q: use status, restart, reload, or update-tor", sub)
 	case cmd == "tor" && sub != "restart" && sub != "reload" && sub != "update":
 		return "tor needs restart, reload, or update"
-	case u.all && cmd != "status":
-		return "--all is only used with status"
+	case cmd == "keys" && sub != "" && sub != "status" && sub != "offline" && sub != "renew":
+		return fmt.Sprintf("unknown keys action %q: use status, offline or renew", sub)
+	case (u.removeMaster || u.renewFlags) && cmd != "keys":
+		return "--remove-master, --master, --from and --lifetime are only used with keys"
+	case u.removeMaster && sub != "offline":
+		return "--remove-master is only used with keys offline"
+	case u.renewFlags && sub != "renew":
+		return "--master, --from and --lifetime are only used with keys renew"
+	case u.check && cmd != "self-update" && cmd != "proof":
+		return "--check is only used with self-update and proof"
+	case u.all && cmd != "status" && cmd != "proof":
+		return "--all is only used with status and proof"
 	case u.all && u.instance:
 		return "--all conflicts with --instance"
-	case u.instance && cmd != "" && cmd != "status" && cmd != "console" && cmd != "setup" && cmd != "apply" && cmd != "tor":
-		return "--instance is only used with status, console, setup, apply and tor"
+	case u.instance && !slices.Contains([]string{"", "status", "console", "setup", "apply", "tor", "proof", "keys"}, cmd):
+		return "--instance is only used with status, console, setup, apply, tor, proof and keys"
 	case u.instance && u.remoteApply:
 		return "--instance cannot be combined with --host or --inventory; set relay.instance in the config instead"
 	}
@@ -617,13 +673,28 @@ func printStatus(w io.Writer, r status.Report, several bool) {
 		fmt.Fprintf(w, "No relay is configured in %s. Run: sudo tor-relay-setup\n", inst.TorrcPath)
 		return
 	}
-	fmt.Fprintf(w, "Relay        %s (%s)\n", r.Relay.Nickname, map[bool]string{true: "exit", false: "guard/middle"}[r.Relay.Exit])
+	kind := map[bool]string{true: "exit", false: "guard/middle"}[r.Relay.Exit]
+	if r.Bridge != nil {
+		kind = "bridge, " + r.Bridge.Transport
+	}
+	fmt.Fprintf(w, "Relay        %s (%s)\n", r.Relay.Nickname, kind)
 	if r.Relay.Fingerprint != "" {
 		fmt.Fprintf(w, "Fingerprint  %s\n", r.Relay.Fingerprint)
 	}
 	fmt.Fprintf(w, "tor          %s %s\n", mark(r.Tor.Supported), r.Tor.Version)
 	fmt.Fprintf(w, "Service      %s %s\n", mark(r.Service.Active), r.Service.Unit)
-	fmt.Fprintf(w, "Listener     %s TCP %d\n", mark(r.Listener.IPv4 || r.Listener.IPv6), r.Relay.ORPort)
+	if r.Relay.ORPort > 0 {
+		fmt.Fprintf(w, "Listener     %s TCP %d\n", mark(r.Listener.IPv4 || r.Listener.IPv6), r.Relay.ORPort)
+	}
+	if b := r.Bridge; b != nil {
+		fmt.Fprintf(w, "Transport    %s %s on port %d · distribution %s\n", mark(b.Listening), b.Transport, b.Port, b.Distribution)
+		if b.Line != "" {
+			fmt.Fprintf(w, "Bridge line  %s\n", b.Line)
+		}
+	}
+	if k := r.Keys; k != nil && k.Managed() && !k.CertExpires.IsZero() {
+		fmt.Fprintf(w, "Signing key  %s valid until %s (offline master key)\n", mark(k.CertExpires.After(time.Now())), k.CertExpires.Format("2006-01-02 15:04 UTC"))
+	}
 	reach := "no self-test notice in the last 24 h"
 	if r.Reachability.IPv4 {
 		reach = "reachable from outside"
@@ -635,6 +706,9 @@ func printStatus(w io.Writer, r status.Report, several bool) {
 		fmt.Fprintf(w, "Family       %s\n", strings.Join(r.Family.IDs, ", "))
 	}
 	switch {
+	case r.BridgeDirectory != nil:
+		d := r.BridgeDirectory
+		fmt.Fprintf(w, "Tor Metrics  %s running=%v flags=%s distributor=%s\n", mark(d.Running), d.Running, strings.Join(d.Flags, ","), orNone(d.Distributor))
 	case r.Directory != nil:
 		fmt.Fprintf(w, "Tor Metrics  %s running=%v flags=%s\n", mark(r.Directory.Running), r.Directory.Running, strings.Join(r.Directory.Flags, ","))
 	case r.DirectoryError != "":
