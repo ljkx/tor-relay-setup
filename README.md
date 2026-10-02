@@ -31,7 +31,8 @@ Set up and run a public **Tor relay** on Debian or Ubuntu from one small, signed
 - **Identity keys and ContactInfo proofs:** move a relay's master key offline and renew its signing key, and generate the files that prove your relays' ContactInfo.
 - **Several relays per server:** add relays as Debian tor instances, with ports, MetricsPorts and the shared family key handled for you.
 - **Fleets:** describe all your relays in one `fleet.toml`. Apply it over SSH in parallel as one family, watch every relay in one dashboard with aggregate statistics, and roll out restarts or Tor updates one relay at a time.
-- **Monitoring and alerts:** overload warnings before Relay Search flags you, notifications through ntfy, webhooks, email or a command, Prometheus output, and a ready-made Grafana dashboard.
+- **Monitoring and alerts:** overload warnings before Relay Search flags you, notifications through ntfy, webhooks, email or a command, and Prometheus output.
+- **A Grafana for the whole fleet:** `monitor install` sets up HTTPS Grafana dashboards of every relay, aggregated, on a management server. Relays are probed over SSH with a key that can run only a read-only probe.
 
 ## Install
 
@@ -49,7 +50,7 @@ sudo bash install.sh
 **Debian package** (`amd64` or `arm64`):
 
 ```bash
-VERSION=v3.2.0
+VERSION=v3.3.0
 ARCH=$(dpkg --print-architecture)
 curl -fsSLO "https://github.com/ljkx/tor-relay-setup/releases/download/${VERSION}/tor-relay-setup_${VERSION#v}_${ARCH}.deb"
 gh attestation verify "tor-relay-setup_${VERSION#v}_${ARCH}.deb" -R ljkx/tor-relay-setup   # optional
@@ -162,6 +163,43 @@ sudo tor-relay-setup alert install           # check every 5 minutes and notify 
 
 [`docs/monitoring/`](docs/monitoring/README.md) has the textfile-collector timer, safe ways to scrape Tor's MetricsPort, Prometheus alerting rules, and a [Grafana dashboard](docs/monitoring/grafana-dashboard.json).
 
+### Grafana for the whole fleet
+
+On a small management server (not a relay), one command sets up an HTTPS Grafana with every relay's statistics, aggregated:
+
+```bash
+sudo tor-relay-setup monitor install --domain grafana.example.org --email you@example.org
+```
+
+It installs and configures four pieces:
+- **fleet serve:** probes your relays over SSH.
+- **Prometheus:** keeps 400 days of history.
+- **Grafana:** from Grafana's signed apt repository, with the dashboards provisioned.
+- **Caddy:** gives Grafana a Let's Encrypt certificate.
+
+Only ports 80 and 443 are opened. Grafana and Prometheus listen on localhost, and the admin password is generated and shown once.
+
+On each relay, allow the monitoring server's key; `monitor status` prints the exact command:
+
+```bash
+sudo tor-relay-setup fleet authorize --key 'ssh-ed25519 AAAA… tor-relay-monitor@monitor' --from 203.0.113.10
+```
+
+That key can only run the read-only `fleet-probe`, as a dedicated `tor-relay-probe` user with exactly one sudo rule (a forced command). Relays expose nothing new.
+
+The dashboards:
+- **Tor fleet — overview:**
+  - relays and hosts up;
+  - the fleet's share of the network, and its guard, middle and exit probability;
+  - live and 30-day traffic, with throughput per relay;
+  - a relay table;
+  - a world map and diversity by country, AS, role and version;
+  - overload signals, accounting budgets, family and signing-key status;
+  - probe health, and firing alerts from the bundled Prometheus rules.
+- **Tor fleet — relay detail:** the same for one relay over time.
+
+`https://grafana.example.org/fleet/` also serves fleet serve's own read-only web view, behind its own login. See [`docs/monitoring/README.md`](docs/monitoring/README.md#fleet-dashboard-on-a-management-server) for the architecture and security design. `tor-relay-setup fleet serve --demo` serves a synthetic fleet if you want to look first.
+
 ## The operator console
 
 <p align="center">
@@ -268,6 +306,10 @@ tor-relay-setup status [--all] [--format text|json|prometheus]
                                           relay health; text and json exit 1 when something needs attention
 tor-relay-setup fleet [status|restart|reload|update-tor]
                                           fleet dashboard, fleet status, rolling actions
+tor-relay-setup fleet serve [--demo]      read-only fleet service: /metrics for Prometheus, JSON API, web view
+tor-relay-setup fleet authorize --key KEY on a relay: allow a monitoring server's read-only probe key
+tor-relay-setup monitor install --domain NAME
+                                          Prometheus + Grafana dashboards behind HTTPS on a management server
 tor-relay-setup tor restart|reload|update restart and verify, reload, or upgrade tor on this server
 tor-relay-setup alert run|test|install|uninstall
                                           notifications about problems; install adds a systemd timer

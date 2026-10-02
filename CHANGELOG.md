@@ -2,6 +2,57 @@
 
 All notable changes to this project are documented here.
 
+## v3.3.0 - 2026-10-02
+
+A Grafana dashboard for the whole fleet, aggregated, on a management server, with relays that expose nothing new.
+
+**Upgrade:** `sudo tor-relay-setup self-update` on every relay, then follow "Grafana for the whole fleet" in the operator guide.
+
+**How this release was tested:**
+- The dashboards ran in a real Prometheus 2.53 and Grafana 13.2 against `fleet serve --demo` and a synthetic fleet with 14 days of history. Every panel query returns data, and the dashboards were reviewed and tuned in the browser.
+- The bundled Prometheus rules pass `promtool` on the oldest (2.31) and newest supported versions, including rule unit tests.
+- The installer's apt keys were verified against the live Grafana and Caddy repositories. The installer itself is covered by fake-host and dry-run tests.
+- **Not yet tested on a real server:**
+  - a real `monitor install` (apt, Let's Encrypt, ufw);
+  - the relay-side forced-command key end to end.
+
+  Please report what you find.
+
+### Added
+
+- **`monitor install|status|uninstall`** sets up the stack on a management server:
+  - fleet serve;
+  - Prometheus, on loopback with 400 days of history and the fleet alert rules;
+  - Grafana OSS, from its signed apt repository with the key fingerprint pinned, hardened, with no default admin, no anonymous access and the dashboards provisioned;
+  - Caddy, with automatic HTTPS.
+
+  It writes every file with backups and dry-run output, is safe to run again, and opens only ports 80 and 443.
+- **Grafana dashboards:**
+  - *Tor fleet — overview*: relays and hosts up, network share, guard/middle/exit probability, live and 30-day traffic, a relay table, a world map, diversity by country, AS, role and version, overload signals, accounting, family and signing keys, probe health, and firing alerts.
+  - *Tor fleet — relay detail*: the same for one relay over time.
+
+  They are generated from code and checked against the metrics contract.
+- **`fleet serve`**: a read-only service for the management server.
+  - It probes the fleet on a schedule and serves Prometheus `/metrics` (bearer token), a JSON API, and a polished web view.
+  - The web view has argon2id logins, strict CSP, CSRF protection, rate-limited logins, TLS or loopback only, and a privacy mode without per-relay traffic.
+  - `fleet serve passwd` and `fleet serve token` manage its logins and token. `fleet serve --demo` serves a synthetic fleet.
+- **`fleet authorize`** on a relay lets one management server run only the read-only probe: a dedicated user, a forced command, one sudoers rule, and source addresses restricted with `--from`.
+- **Richer fleet probes:** tor's load counters, the accounting budget, keys and bridge state, and Onionoo's country, AS and overload data.
+
+### Changed
+
+- The fleet Prometheus series follow [`docs/monitoring/fleet-metrics.md`](docs/monitoring/fleet-metrics.md):
+  - `relay_directory_running` is now `relay_running`;
+  - `host_up` has one series per state;
+  - per-relay series carry a `role` label;
+  - `relay_listener` and `relay_reachable` carry a `family` label.
+
+### Fixed
+
+- Bridges were looked up in Tor Metrics by their real fingerprint in fleet commands; they are now looked up by hashed fingerprint only.
+- Accounting for Debian tor instances read the default instance's state file.
+- Bridges no longer count as family drift.
+
 ## v3.2.0 - 2026-10-02
 
 Version 3.2 is for operators of many relays, and of every kind of relay: several relays per server, fleets with a shared dashboard, alerts, bridges, exit tools, and offline identity keys.
