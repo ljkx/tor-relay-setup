@@ -28,20 +28,23 @@ const (
 
 // HostProbe is the outcome of probing one server.
 type HostProbe struct {
-	Address string
-	At      time.Time
-	State   HostState
-	Detail  string // why it failed, for the operator
-	Probe   Probe
+	Address  string
+	At       time.Time
+	Duration time.Duration // how long the probe took, connection included
+	State    HostState
+	Detail   string // why it failed, for the operator
+	Probe    Probe
 }
 
 // HostStatus is the dashboard's view of one server.
 type HostStatus struct {
-	Address string
-	State   HostState
-	Detail  string
-	Version string // tor-relay-setup on the host
-	At      time.Time
+	Address  string
+	State    HostState
+	Detail   string
+	Version  string // tor-relay-setup on the host
+	At       time.Time
+	Duration time.Duration // the last probe's duration
+	LastOK   time.Time     // the last successful probe; zero before one
 }
 
 // Relay is one row of the dashboard: an inventory entry, or a relay a host
@@ -57,6 +60,40 @@ type Relay struct {
 	last    metrics.Sample
 	Rate    metrics.Rate // live traffic between the last two probes
 	HasRate bool
+
+	// counted holds the traffic counters last added to the fleet's
+	// traffic total (see Model.count).
+	counted       bool
+	countedRead   uint64
+	countedWrites uint64
+}
+
+// IsBridge reports whether the last probe found a bridge, or, before one,
+// whether the inventory configures one.
+func (r *Relay) IsBridge() bool {
+	if r.Probe != nil {
+		return r.Probe.Report.Bridge != nil
+	}
+	return r.Entry != nil && r.Entry.Setup.Relay.Mode == "bridge"
+}
+
+// HashedFingerprint is a bridge's hashed fingerprint, the only one that
+// may leave the management machine; empty for relays.
+func (r *Relay) HashedFingerprint() string {
+	if r.Probe == nil || r.Probe.Report.Bridge == nil {
+		return ""
+	}
+	return r.Probe.Report.Bridge.HashedFingerprint
+}
+
+// PublicFingerprint identifies the relay in metrics, the web UI and Tor
+// Metrics lookups: the fingerprint of a relay, the hashed fingerprint of a
+// bridge.
+func (r *Relay) PublicFingerprint() string {
+	if r.IsBridge() {
+		return r.HashedFingerprint()
+	}
+	return r.Fingerprint()
 }
 
 // Nickname is the configured nickname, or the inventory's.
@@ -107,20 +144,32 @@ type Model struct {
 	relays    []*Relay
 
 	// Directory holds Tor Metrics details by fingerprint; DirAt is when they
-	// were fetched (zero before the first lookup) and DirErr why the last
-	// lookup failed.
+	// were last asked for (zero before the first lookup), DirErr why that
+	// lookup failed, and DirOK when a lookup last succeeded.
 	Directory map[string]*onionoo.Relay
 	DirAt     time.Time
 	DirErr    error
+	DirOK     time.Time
+	// BridgeDirectory holds Tor Metrics bridge details by hashed
+	// fingerprint.
+	BridgeDirectory map[string]*onionoo.Bridge
 	// History holds Tor Metrics traffic history by fingerprint.
 	History map[string]*onionoo.Bandwidth
 	// PrevFlags are the flags the previous dashboard run saw.
 	PrevFlags FlagCache
+
+	// RoundEnd and RoundDuration describe the last full probe round
+	// (fleet serve, fleet status); zero before one ended.
+	RoundEnd      time.Time
+	RoundDuration time.Duration
+	rounds        int
+	// trafficRead and trafficWritten are the fleet's traffic counters.
+	trafficRead, trafficWritten float64
 }
 
 // NewModel starts a model with every inventory entry pending.
 func NewModel(inv Inventory) *Model {
-	m := &Model{Inventory: inv, Directory: map[string]*onionoo.Relay{}, History: map[string]*onionoo.Bandwidth{}}
+	m := &Model{Inventory: inv, Directory: map[string]*onionoo.Relay{}, BridgeDirectory: map[string]*onionoo.Bridge{}, History: map[string]*onionoo.Bandwidth{}}
 	for _, addr := range inv.Addresses() {
 		m.hosts = append(m.hosts, &HostStatus{Address: addr, State: HostPending})
 	}
@@ -155,11 +204,18 @@ func (m *Model) Apply(p HostProbe) {
 		h = &HostStatus{Address: p.Address}
 		m.hosts = append(m.hosts, h)
 	}
-	h.State, h.Detail, h.At = p.State, p.Detail, p.At
+	h.State, h.Detail, h.At, h.Duration = p.State, p.Detail, p.At, p.Duration
 	if p.State != HostOK {
+		// The last reports stay for the detail view, but live rates are
+		// not live any more.
+		for _, r := range m.relays {
+			if strings.EqualFold(r.Address, p.Address) {
+				r.HasRate = false
+			}
+		}
 		return
 	}
-	h.Version = p.Probe.Version
+	h.Version, h.LastOK = p.Probe.Version, p.At
 	seen := map[*Relay]bool{}
 	for i := range p.Probe.Relays {
 		rp := p.Probe.Relays[i]
@@ -170,7 +226,11 @@ func (m *Model) Apply(p HostProbe) {
 		}
 		seen[r] = true
 		r.Probe, r.Missing = &rp, false
-		r.record(rp.Traffic)
+		s := rp.MetricsSample()
+		r.record(s)
+		if s != nil {
+			m.count(r, *s)
+		}
 	}
 	for _, r := range m.relays {
 		if strings.EqualFold(r.Address, p.Address) && !seen[r] {
@@ -188,15 +248,57 @@ func (m *Model) relay(address, instance string) *Relay {
 	return nil
 }
 
+// count adds a relay's traffic to the fleet's traffic counters, which only
+// ever grow: in the first probe round every relay adds its counters, later
+// each adds its increase since it was last counted (or its counters, when
+// they went backwards because tor restarted). A relay first seen after the
+// first round starts from its current counters, so its whole past traffic
+// does not show up as one burst.
+func (m *Model) count(r *Relay, s metrics.Sample) {
+	add := func(prev, cur uint64, total *float64) {
+		switch {
+		case !r.counted:
+			if m.rounds == 0 {
+				*total += float64(cur)
+			}
+		case cur < prev:
+			*total += float64(cur)
+		default:
+			*total += float64(cur - prev)
+		}
+	}
+	add(r.countedRead, s.Read, &m.trafficRead)
+	add(r.countedWrites, s.Written, &m.trafficWritten)
+	r.counted, r.countedRead, r.countedWrites = true, s.Read, s.Written
+}
+
+// EndRound records the end of a full probe round of all hosts.
+func (m *Model) EndRound(start, end time.Time) {
+	m.RoundEnd, m.RoundDuration = end, end.Sub(start)
+	m.rounds++
+}
+
+// Fresh returns the relay's probe when its host answered the last probe,
+// nil otherwise: the report of an unreachable host is out of date.
+func (m *Model) Fresh(r *Relay) *RelayProbe {
+	if r.Probe == nil || r.Missing {
+		return nil
+	}
+	if h := m.Host(r.Address); h == nil || h.State != HostOK {
+		return nil
+	}
+	return r.Probe
+}
+
 // record turns consecutive traffic samples into a live rate. A probe
 // without traffic clears it; counters that went backwards (Tor restarted)
 // start over.
-func (r *Relay) record(t *Traffic) {
+func (r *Relay) record(t *metrics.Sample) {
 	if t == nil {
 		r.last, r.HasRate = metrics.Sample{}, false
 		return
 	}
-	s := t.Sample()
+	s := *t
 	switch rate, ok := metrics.Between(r.last, s); {
 	case r.last.At.IsZero():
 	case ok:
@@ -207,11 +309,27 @@ func (r *Relay) record(t *Traffic) {
 	r.last = s
 }
 
-// Fingerprints lists the known fingerprints, for Tor Metrics lookups.
+// Fingerprints lists the known relay fingerprints, for Tor Metrics
+// lookups. Bridges are left out: their fingerprints must never leave the
+// management machine (see BridgeFingerprints).
 func (m *Model) Fingerprints() []string {
 	var out []string
 	for _, r := range m.relays {
+		if r.IsBridge() {
+			continue
+		}
 		if fp := r.Fingerprint(); fp != "" && !slices.Contains(out, fp) {
+			out = append(out, fp)
+		}
+	}
+	return out
+}
+
+// BridgeFingerprints lists the hashed fingerprints of the known bridges.
+func (m *Model) BridgeFingerprints() []string {
+	var out []string
+	for _, r := range m.relays {
+		if fp := r.HashedFingerprint(); fp != "" && !slices.Contains(out, fp) {
 			out = append(out, fp)
 		}
 	}
@@ -222,7 +340,26 @@ func (m *Model) Fingerprints() []string {
 func (m *Model) SetDirectory(details map[string]*onionoo.Relay, err error, at time.Time) {
 	m.DirAt, m.DirErr = at, err
 	if err == nil {
-		m.Directory = details
+		m.Directory, m.DirOK = details, at
+		if m.Directory == nil {
+			m.Directory = map[string]*onionoo.Relay{}
+		}
+	}
+}
+
+// SetBridgeDirectory records a bulk Tor Metrics bridge lookup.
+func (m *Model) SetBridgeDirectory(bridges map[string]*onionoo.Bridge) {
+	if bridges != nil {
+		m.BridgeDirectory = bridges
+	}
+}
+
+// SetDirectoryResult records a FetchDirectory lookup.
+func (m *Model) SetDirectoryResult(d DirectoryResult) {
+	m.SetDirectory(d.Details, d.Err, d.At)
+	if d.Err == nil {
+		m.SetBridgeDirectory(d.Bridges)
+		m.SetHistory(d.History)
 	}
 }
 
@@ -233,24 +370,91 @@ func (m *Model) SetHistory(history map[string]*onionoo.Bandwidth) {
 	}
 }
 
-// DirectoryOf returns the Tor Metrics details of a relay, or nil.
+// DirectoryOf returns the Tor Metrics details of a relay, or nil (always
+// for bridges; see BridgeDirectoryOf).
 func (m *Model) DirectoryOf(r *Relay) *onionoo.Relay {
+	if r.IsBridge() {
+		return nil
+	}
 	if fp := r.Fingerprint(); fp != "" {
 		return m.Directory[fp]
 	}
 	return nil
 }
 
+// BridgeDirectoryOf returns the Tor Metrics details of a bridge, or nil.
+func (m *Model) BridgeDirectoryOf(r *Relay) *onionoo.Bridge {
+	if fp := r.HashedFingerprint(); fp != "" {
+		return m.BridgeDirectory[fp]
+	}
+	return nil
+}
+
+// Published reports whether Tor Metrics lists the relay or bridge, and
+// whether that is known at all (a lookup succeeded and the fingerprint is
+// known).
+func (m *Model) Published(r *Relay) (published, known bool) {
+	if m.DirOK.IsZero() || r.PublicFingerprint() == "" {
+		return false, false
+	}
+	if r.IsBridge() {
+		return m.BridgeDirectoryOf(r) != nil, true
+	}
+	return m.DirectoryOf(r) != nil, true
+}
+
+// Roles of a relay in the fleet metrics.
+const (
+	RoleGuard  = "guard"
+	RoleExit   = "exit"
+	RoleMiddle = "middle"
+	RoleBridge = "bridge"
+)
+
+// Role classifies the relay: bridge; exit with the Exit flag; guard with
+// the Guard flag; middle otherwise. A relay with both flags counts as an
+// exit. Before Tor Metrics lists a relay, the configuration decides
+// (ExitRelay 1 is an exit, everything else a middle).
+func (m *Model) Role(r *Relay) string {
+	if r.IsBridge() {
+		return RoleBridge
+	}
+	if d := m.DirectoryOf(r); d != nil {
+		switch {
+		case slices.Contains(d.Flags, "Exit"):
+			return RoleExit
+		case slices.Contains(d.Flags, "Guard"):
+			return RoleGuard
+		}
+		return RoleMiddle
+	}
+	switch {
+	case r.Probe != nil && r.Probe.Report.Relay.Exit:
+		return RoleExit
+	case r.Probe == nil && r.Entry != nil && r.Entry.Setup.Relay.Mode == "exit":
+		return RoleExit
+	}
+	return RoleMiddle
+}
+
 // Totals are the fleet-wide numbers of the dashboard header.
 type Totals struct {
 	Relays, Running            int
 	Hosts, Unreachable, TooOld int // TooOld also counts hosts without tor-relay-setup
-	Published                  int // relays Tor Metrics lists
+	HostsUp                    int // hosts whose last probe answered
+	Published                  int // relays and bridges Tor Metrics lists
 	ConsensusWeight            int64
 	WeightFraction             float64 // share of the network's consensus weight
 	Guard, Middle, Exit        float64 // summed selection probabilities
 	Read, Written              float64 // live bytes per second
-	Advertised                 int64   // bytes per second
+	Advertised                 int64   // bytes per second, bridges included
+	Observed                   int64   // bytes per second
+	// Connections sums the open OR connections of the relays whose
+	// MetricsPort answered the last probe (Sampled of them).
+	Connections, Sampled int
+	// TrafficRead and TrafficWritten are the fleet's traffic counters in
+	// bytes: they only grow (see Model.count).
+	TrafficRead, TrafficWritten float64
 	// History is the fleet's daily traffic (read + written, bytes per
 	// second), oldest first; HistoryFirst is its first day.
 	History               []float64
@@ -262,8 +466,11 @@ type Totals struct {
 func (m *Model) Totals() Totals {
 	var t Totals
 	t.Hosts = len(m.hosts)
+	t.TrafficRead, t.TrafficWritten = m.trafficRead, m.trafficWritten
 	for _, h := range m.hosts {
 		switch h.State {
+		case HostOK:
+			t.HostsUp++
 		case HostUnreachable, HostFailed:
 			t.Unreachable++
 		case HostTooOld, HostMissing:
@@ -273,8 +480,15 @@ func (m *Model) Totals() Totals {
 	var histories []*onionoo.Bandwidth
 	for _, r := range m.relays {
 		t.Relays++
-		if r.Running() {
+		fresh := m.Fresh(r)
+		if fresh != nil && fresh.Report.Service.Active {
 			t.Running++
+		}
+		if fresh != nil {
+			if s := fresh.MetricsSample(); s != nil {
+				t.Connections += s.Connections
+				t.Sampled++
+			}
 		}
 		if r.HasRate {
 			t.Read += r.Rate.Read
@@ -288,6 +502,11 @@ func (m *Model) Totals() Totals {
 			t.Middle += d.MiddleProbability
 			t.Exit += d.ExitProbability
 			t.Advertised += d.AdvertisedBandwidth
+			t.Observed += d.ObservedBandwidth
+		}
+		if b := m.BridgeDirectoryOf(r); b != nil {
+			t.Published++
+			t.Advertised += b.AdvertisedBandwidth
 		}
 		if fp := r.Fingerprint(); fp != "" && m.History[fp] != nil {
 			histories = append(histories, m.History[fp])
@@ -398,11 +617,18 @@ func (m *Model) Attention() []Item {
 		case !rep.Service.Active:
 			add(Bad, "not-running", "%s: %s is not running", name, rep.Service.Unit)
 		}
-		if fp := rep.Relay.Fingerprint; dirOK && fp != "" {
-			switch d := m.Directory[fp]; {
-			case d == nil:
+		if published, known := m.Published(r); dirOK && known {
+			running := false
+			if d := m.DirectoryOf(r); d != nil {
+				running = d.Running
+			}
+			if b := m.BridgeDirectoryOf(r); b != nil {
+				running = b.Running
+			}
+			switch {
+			case !published:
 				add(Warn, "unpublished", "%s: not in Tor Metrics (new relays appear after about 3 hours)", name)
-			case !d.Running:
+			case !running:
 				add(Bad, "directory-down", "%s: Tor Metrics reports it as not running", name)
 			}
 		}
@@ -467,13 +693,15 @@ func (m *Model) label(r *Relay) string {
 	return nick
 }
 
-// familyDrift flags relays whose FamilyId set differs from the most common
-// set in the fleet. Ties go to the set that sorts first.
-func (m *Model) familyDrift() []Item {
+// familySets returns each configured relay's FamilyId set (sorted, joined)
+// and the most common set; ties go to the set that sorts first. Bridges
+// are left out: a bridge must not be in a relay family. distinct is the
+// number of different sets.
+func (m *Model) familySets() (sets map[*Relay]string, majority string, distinct int) {
 	counts := map[string]int{}
-	sets := map[*Relay]string{}
+	sets = map[*Relay]string{}
 	for _, r := range m.relays {
-		if r.Probe == nil || !r.Probe.Report.Relay.Configured {
+		if r.Probe == nil || !r.Probe.Report.Relay.Configured || r.IsBridge() {
 			continue
 		}
 		ids := slices.Clone(r.Probe.Report.Family.IDs)
@@ -482,15 +710,33 @@ func (m *Model) familyDrift() []Item {
 		sets[r] = key
 		counts[key]++
 	}
-	if len(counts) < 2 {
-		return nil
-	}
 	keys := make([]string, 0, len(counts))
 	for k := range counts {
 		keys = append(keys, k)
 	}
 	slices.SortFunc(keys, func(a, b string) int { return cmp.Or(-cmp.Compare(counts[a], counts[b]), cmp.Compare(a, b)) })
-	majority := keys[0]
+	if len(keys) > 0 {
+		majority = keys[0]
+	}
+	return sets, majority, len(keys)
+}
+
+// FamilyConsistent reports whether the relay's FamilyId set matches the
+// fleet's most common set, and whether that is known (bridges and relays
+// without a report have none).
+func (m *Model) FamilyConsistent(r *Relay) (consistent, known bool) {
+	sets, majority, _ := m.familySets()
+	key, ok := sets[r]
+	return ok && key == majority, ok
+}
+
+// familyDrift flags relays whose FamilyId set differs from the most common
+// set in the fleet.
+func (m *Model) familyDrift() []Item {
+	sets, majority, distinct := m.familySets()
+	if distinct < 2 {
+		return nil
+	}
 	var items []Item
 	for _, r := range m.relays {
 		key, ok := sets[r]
@@ -522,8 +768,8 @@ func (m *Model) versionDrift() string {
 
 // VersionCount is how many relays run one tor version.
 type VersionCount struct {
-	Version string
-	Count   int
+	Version string `json:"version"`
+	Count   int    `json:"count"`
 }
 
 // TorVersions counts the tor versions in the fleet, most common first.

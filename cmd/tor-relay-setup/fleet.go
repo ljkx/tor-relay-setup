@@ -186,24 +186,20 @@ func fleetStatus(ctx context.Context, f *remote.Fleet, inv fleet.Inventory, o fl
 	if cachePath != "" {
 		m.PrevFlags = fleet.LoadFlagCache(o.Local, cachePath)
 	}
+	start := time.Now()
 	for _, hp := range f.ProbeAll(ctx, inv.Addresses(), probeParallel) {
 		m.Apply(hp)
 	}
-	if fps := m.Fingerprints(); len(fps) > 0 {
+	m.EndRound(start, time.Now())
+	if fps, bridges := m.Fingerprints(), m.BridgeFingerprints(); len(fps)+len(bridges) > 0 {
 		dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		details, err := o.Onionoo.DetailsBulk(dctx, fps)
-		m.SetDirectory(details, err, time.Now())
-		if o.Format != "prometheus" && err == nil {
-			if bw, err := o.Onionoo.BandwidthBulk(dctx, fps); err == nil {
-				m.SetHistory(bw)
-			}
-		}
+		m.SetDirectoryResult(fleet.FetchDirectory(dctx, o.Onionoo, fps, bridges, o.Format != "prometheus"))
 		cancel()
 	}
 	var err error
 	switch o.Format {
 	case "prometheus":
-		if err := m.WritePrometheus(o.Out); err != nil {
+		if err := m.WritePrometheus(o.Out, fleet.PrometheusOptions{}); err != nil {
 			return 1
 		}
 		return 0

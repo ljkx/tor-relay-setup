@@ -1,0 +1,70 @@
+# Unit tests for prometheus-fleet-rules.yml:
+#   promtool test rules docs/monitoring/dev/fleet-rules.test.yml
+rule_files:
+  - ../prometheus-fleet-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'tor_relay_fleet_relay_service_active{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="guard"}'
+        values: "1 1 0x10"
+      - series: 'tor_relay_fleet_host_up{host="b.example.net",state="unreachable"}'
+        values: "0 1x20"
+      - series: 'tor_relay_fleet_host_up{host="b.example.net",state="ok"}'
+        values: "1 0x20"
+      - series: 'tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="guard"}'
+        values: "43200x80"
+      - series: 'up{job="tor-relay-fleet",instance="127.0.0.1:9850"}'
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TorFleetRelayDown
+        exp_alerts:
+          - exp_labels: {severity: critical, host: a.example.net, tor_instance: default, nickname: A, fingerprint: AA, role: guard}
+            exp_annotations:
+              summary: "tor is not running for A on a.example.net"
+              description: "The tor unit (default) is inactive. Check: journalctl -u tor@default -n 50"
+      - eval_time: 10m
+        alertname: TorFleetHostUnreachable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TorFleetHostUnreachable
+        exp_alerts:
+          - exp_labels: {severity: critical, host: b.example.net, state: unreachable}
+            exp_annotations:
+              summary: "b.example.net is unreachable over SSH"
+              description: "The server is down, its network is, or the monitoring key was refused. Test: sudo -u tor-relay-monitor ssh b.example.net"
+      - eval_time: 5m
+        alertname: TorFleetSigningCertExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: critical, host: a.example.net, tor_instance: default, nickname: A, fingerprint: AA, role: guard}
+            exp_annotations:
+              summary: "The signing certificate of A (a.example.net) expires in 11h 55m 0s"
+              description: "Renew it now: tor-relay-setup keys renew."
+      - eval_time: 10m
+        alertname: TorFleetServeDown
+        exp_alerts: []
+
+  # A lost Guard flag fires while the relay keeps running; the flag series
+  # disappears instead of turning 0.
+  - interval: 1m
+    input_series:
+      - series: 'tor_relay_fleet_relay_flag{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="guard",flag="Guard"}'
+        values: "1x20 _x200"
+      - series: 'tor_relay_fleet_relay_flag{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="middle",flag="Running"}'
+        values: "1x220"
+      - series: 'tor_relay_fleet_relay_running{host="a.example.net",tor_instance="default",nickname="A",fingerprint="AA",role="middle"}'
+        values: "1x220"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TorFleetRelayLostFlag
+        exp_alerts: []
+      - eval_time: 160m
+        alertname: TorFleetRelayLostFlag
+        exp_alerts:
+          - exp_labels: {severity: warning, host: a.example.net, tor_instance: default, nickname: A, fingerprint: AA, role: guard, flag: Guard}
+            exp_annotations:
+              summary: "A (a.example.net) lost the Guard flag"
+              description: "The relay held Guard during the last day. Restarts reset Stable and Guard; lower measured bandwidth costs Fast and Guard."

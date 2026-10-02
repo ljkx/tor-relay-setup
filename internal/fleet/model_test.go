@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/metrics"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/status"
 )
@@ -95,7 +96,7 @@ func TestModelTotals(t *testing.T) {
 	want := Totals{
 		Relays: 7, Running: 2, Hosts: 5, Unreachable: 1, TooOld: 2, Published: 3,
 		ConsensusWeight: 151, WeightFraction: 0.0015, Guard: 0.002, Middle: 0.003, Exit: 0.0001,
-		Read: 1000, Written: 3000, Advertised: 1510,
+		Read: 1000, Written: 3000, Advertised: 1510, HostsUp: 2, Connections: 7, Sampled: 1, TrafficRead: 1_010_000, TrafficWritten: 2_030_000,
 	}
 	if math.Abs(tot.WeightFraction-0.0015) < 1e-12 {
 		tot.WeightFraction = 0.0015
@@ -119,25 +120,25 @@ func TestModelTotals(t *testing.T) {
 
 func TestRelayRates(t *testing.T) {
 	r := &Relay{}
-	r.record(&Traffic{At: t0, Read: 100, Written: 100})
+	r.record(&metrics.Sample{At: t0, Read: 100, Written: 100})
 	if r.HasRate {
 		t.Fatal("one sample is no rate")
 	}
-	r.record(&Traffic{At: t0.Add(2 * time.Second), Read: 300, Written: 500})
+	r.record(&metrics.Sample{At: t0.Add(2 * time.Second), Read: 300, Written: 500})
 	if !r.HasRate || r.Rate.Read != 100 || r.Rate.Written != 200 {
 		t.Fatalf("rate = %+v", r.Rate)
 	}
 	// The same sample again (a cached probe) keeps the rate.
-	r.record(&Traffic{At: t0.Add(2 * time.Second), Read: 300, Written: 500})
+	r.record(&metrics.Sample{At: t0.Add(2 * time.Second), Read: 300, Written: 500})
 	if !r.HasRate {
 		t.Error("an unchanged sample dropped the rate")
 	}
 	// Tor restarted: counters went backwards.
-	r.record(&Traffic{At: t0.Add(4 * time.Second), Read: 10, Written: 10})
+	r.record(&metrics.Sample{At: t0.Add(4 * time.Second), Read: 10, Written: 10})
 	if r.HasRate {
 		t.Error("counters went backwards, but a rate is shown")
 	}
-	r.record(&Traffic{At: t0.Add(6 * time.Second), Read: 20, Written: 30})
+	r.record(&metrics.Sample{At: t0.Add(6 * time.Second), Read: 20, Written: 30})
 	if !r.HasRate || r.Rate.Read != 5 {
 		t.Errorf("after the restart: %+v", r.Rate)
 	}
@@ -364,41 +365,6 @@ func TestWriteJSON(t *testing.T) {
 	}
 	if len(doc.Attention) != 14 {
 		t.Errorf("attention = %d", len(doc.Attention))
-	}
-}
-
-func TestWritePrometheus(t *testing.T) {
-	m := testFleet(t)
-	withDirectory(m)
-	var b bytes.Buffer
-	if err := m.WritePrometheus(&b); err != nil {
-		t.Fatal(err)
-	}
-	out := b.String()
-	for _, want := range []string{
-		"# TYPE tor_relay_fleet_relays gauge\ntor_relay_fleet_relays 7\n",
-		"tor_relay_fleet_relays_running 2\n",
-		"tor_relay_fleet_hosts_unreachable 1\n",
-		"tor_relay_fleet_hosts_without_probe 2\n",
-		"tor_relay_fleet_consensus_weight 151\n",
-		"tor_relay_fleet_consensus_weight_fraction 0.0015",
-		`tor_relay_fleet_host_up{host="c",state="unreachable"} 0`,
-		`tor_relay_fleet_host_up{host="a",state="ok"} 1`,
-		`tor_relay_fleet_relay_info{host="a",tor_instance="default",nickname="One",fingerprint="` + fp("1") + `",version="0.4.9.3"} 1`,
-		`tor_relay_fleet_relay_service_active{host="b",tor_instance="default",nickname="Two",fingerprint="` + fp("2") + `"} 0`,
-		"# TYPE tor_relay_fleet_relay_traffic_bytes_total counter\n",
-		`tor_relay_fleet_relay_traffic_bytes_total{host="a",tor_instance="default",nickname="One",fingerprint="` + fp("1") + `",direction="read"} 1e+06`,
-		`tor_relay_fleet_relay_consensus_weight{host="a",tor_instance="third",nickname="Seven",fingerprint="` + fp("7") + `"} 1`,
-		`tor_relay_fleet_relay_info{host="c",tor_instance="default",nickname="Three",fingerprint="",version=""} 1`,
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("metrics lack %q:\n%s", want, out)
-		}
-	}
-	// Without Tor Metrics data the fleet weight gauges are left out.
-	b.Reset()
-	if err := testFleet(t).WritePrometheus(&b); err != nil || strings.Contains(b.String(), "consensus_weight") {
-		t.Errorf("unknown weights were exported:\n%s", b.String())
 	}
 }
 

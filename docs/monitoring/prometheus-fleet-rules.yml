@@ -1,0 +1,271 @@
+# Prometheus alerting rules for a relay fleet watched by
+# `tor-relay-setup fleet serve` (metrics contract: fleet-metrics.md).
+# `tor-relay-setup monitor install` installs this file as
+# /etc/prometheus/rules/tor-relay-fleet.yml; Grafana lists the rules under
+# Alerting -> Alert rules, and the fleet overview shows the firing ones.
+#
+# Relay series carry host, tor_instance, nickname, fingerprint and role.
+# Tor Metrics (Onionoo) data changes about once an hour, so rules that
+# depend on it wait hours, not minutes.
+#
+# Check with: promtool check rules prometheus-fleet-rules.yml
+#             promtool test rules dev/fleet-rules.test.yml
+groups:
+  - name: tor-relay-fleet-service
+    rules:
+      - alert: TorFleetServeDown
+        expr: up{job="tor-relay-fleet"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape tor-relay-setup fleet serve"
+          description: "Check: systemctl status tor-relay-setup-fleet; journalctl -u tor-relay-setup-fleet -n 50. The bearer token in /etc/prometheus/tor-relay-fleet.token must match metrics_token_sha256 in serve.toml."
+
+      - alert: TorFleetProbeStale
+        expr: time() - tor_relay_fleet_last_probe_timestamp_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The last fleet probe round finished {{ $value | humanizeDuration }} ago"
+          description: "fleet serve runs but no probe round completed for 15 minutes; ssh to a host may hang."
+
+      - alert: TorFleetDirectoryStale
+        expr: time() - tor_relay_fleet_directory_last_update_timestamp_seconds > 3 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tor Metrics data is {{ $value | humanizeDuration }} old"
+          description: "fleet serve could not refresh relay data from Tor Metrics (Onionoo); weights, flags and probabilities are frozen."
+
+  - name: tor-relay-fleet-hosts
+    rules:
+      - alert: TorFleetHostUnreachable
+        expr: tor_relay_fleet_host_up{state="unreachable"} == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} is unreachable over SSH"
+          description: "The server is down, its network is, or the monitoring key was refused. Test: sudo -u tor-relay-monitor ssh {{ $labels.host }}"
+
+      - alert: TorFleetHostNoProbe
+        expr: tor_relay_fleet_host_up{state="no_probe"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} cannot run tor-relay-setup fleet-probe"
+          description: "tor-relay-setup is missing or too old on the host; install or self-update it."
+
+      - alert: TorFleetToolVersionDrift
+        expr: count(count by (version) (tor_relay_fleet_host_tool_info)) > 1
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "The fleet runs {{ $value }} different tor-relay-setup versions"
+          description: "Run tor-relay-setup self-update on the older hosts."
+
+  - name: tor-relay-fleet-relays
+    rules:
+      - alert: TorFleetRelayDown
+        expr: tor_relay_fleet_relay_service_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tor is not running for {{ $labels.nickname }} on {{ $labels.host }}"
+          description: "The tor unit ({{ $labels.tor_instance }}) is inactive. Check: journalctl -u tor@{{ $labels.tor_instance }} -n 50"
+
+      - alert: TorFleetRelayNotListening
+        expr: |
+          tor_relay_fleet_relay_service_active == 1
+            and on (host, tor_instance)
+          max by (host, tor_instance) (tor_relay_fleet_relay_listener) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nothing listens on the ORPort of {{ $labels.nickname }} on {{ $labels.host }}"
+          description: "tor runs but has not opened its ORPort."
+
+      - alert: TorFleetRelayUnreachable
+        expr: tor_relay_fleet_relay_reachable{family="ipv4"} == 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The ORPort of {{ $labels.nickname }} on {{ $labels.host }} is not reachable from outside"
+          description: "tor's self-test could not confirm reachability; check the host and provider firewalls."
+
+      - alert: TorFleetRelayNotRunningInConsensus
+        expr: tor_relay_fleet_relay_published == 1 and tor_relay_fleet_relay_running == 0
+        for: 3h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tor Metrics does not list {{ $labels.nickname }} ({{ $labels.host }}) as running"
+          description: "The directory authorities do not consider the relay reachable. Tor Metrics lags by an hour or two."
+
+      - alert: TorFleetRelayDroppedOut
+        expr: tor_relay_fleet_relay_published == 0 and max_over_time(tor_relay_fleet_relay_published[7d]) == 1
+        for: 3h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) dropped out of the consensus"
+          description: "Tor Metrics listed the relay in the last 7 days but no longer does."
+
+      - alert: TorFleetRelayLostFlag
+        expr: |
+          max_over_time(tor_relay_fleet_relay_flag{flag=~"Guard|Stable|Fast|HSDir"}[1d])
+            unless on (host, tor_instance, flag) tor_relay_fleet_relay_flag
+            and on (host, tor_instance) tor_relay_fleet_relay_running == 1
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) lost the {{ $labels.flag }} flag"
+          description: "The relay held {{ $labels.flag }} during the last day. Restarts reset Stable and Guard; lower measured bandwidth costs Fast and Guard."
+
+      - alert: TorFleetConsensusWeightDropped
+        expr: tor_relay_fleet_relay_consensus_weight < 0.5 * max_over_time(tor_relay_fleet_relay_consensus_weight[7d])
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consensus weight of {{ $labels.nickname }} ({{ $labels.host }}) fell by more than half"
+          description: "Current weight {{ $value }}. A restart, a lost flag, lower measured bandwidth, or overload can cause this."
+
+      - alert: TorFleetRelayWarnings
+        expr: tor_relay_fleet_relay_warnings > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) reports {{ $value }} problem(s)"
+          description: "Run on the host: sudo tor-relay-setup status --instance {{ $labels.tor_instance }}"
+
+      - alert: TorFleetTorVersionDrift
+        expr: count(count by (version) (tor_relay_fleet_relay_info{role!="bridge"})) > 1
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "The fleet runs {{ $value }} different tor versions"
+          description: "Upgrade with: tor-relay-setup fleet update-tor"
+
+      - alert: TorFleetBridgeTransportDown
+        expr: tor_relay_fleet_relay_bridge_transport_listening == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.transport }} transport of bridge {{ $labels.nickname }} ({{ $labels.host }}) does not listen"
+          description: "Bridge users cannot connect. Check the pluggable transport in the tor log."
+
+  - name: tor-relay-fleet-load
+    rules:
+      - alert: TorFleetRelayOverloaded
+        expr: tor_relay_fleet_relay_overloaded == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Relay Search shows {{ $labels.nickname }} ({{ $labels.host }}) as overloaded"
+          description: "tor published overload-general in the last 72 hours (OOM, dropped ntor onionskins, or TCP port exhaustion). See https://support.torproject.org/relays/performance/overloaded/"
+
+      - alert: TorFleetOnionskinsDropped
+        expr: |
+          sum by (host, tor_instance, nickname) (increase(tor_relay_fleet_relay_onionskins_total{type=~"ntor|ntor_v3",action="dropped"}[6h]))
+            / sum by (host, tor_instance, nickname) (increase(tor_relay_fleet_relay_onionskins_total{type=~"ntor|ntor_v3"}[6h]))
+            >= 0.01
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) dropped {{ $value | humanizePercentage }} of ntor handshakes"
+          description: "At 1% over 6 hours tor publishes overload-general: a CPU shortage. Give tor more CPU or lower RelayBandwidthRate."
+
+      - alert: TorFleetOutOfMemory
+        expr: sum by (host, tor_instance, nickname) (increase(tor_relay_fleet_relay_oom_bytes_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) hit MaxMemInQueues"
+          description: "The OOM handler freed {{ $value | humanize1024 }}B in the last hour; tor publishes overload-general."
+
+      - alert: TorFleetTCPPortExhaustion
+        expr: increase(tor_relay_fleet_relay_tcp_exhaustion_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) ran out of local TCP ports"
+          description: "Widen net.ipv4.ip_local_port_range (for example 15000 64000)."
+
+      - alert: TorFleetSocketsNearLimit
+        expr: tor_relay_fleet_relay_sockets_open / tor_relay_fleet_relay_sockets_limit > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) uses {{ $value | humanizePercentage }} of its sockets"
+          description: "Raise LimitNOFILE for the tor unit before tor publishes overload-fd-exhausted."
+
+  - name: tor-relay-fleet-accounting
+    rules:
+      - alert: TorFleetAccountingRunsOut
+        expr: tor_relay_fleet_relay_accounting_projected_bytes > tor_relay_fleet_relay_accounting_max_bytes
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "AccountingMax of {{ $labels.nickname }} ({{ $labels.host }}) runs out before the period ends"
+          description: "At the current pace tor hibernates early. Lower RelayBandwidthRate to spread the budget."
+
+      - alert: TorFleetAccountingHigh
+        expr: tor_relay_fleet_relay_accounting_used_bytes / tor_relay_fleet_relay_accounting_max_bytes > 0.9
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) used {{ $value | humanizePercentage }} of AccountingMax"
+          description: "tor hibernates when the budget is used up, until the accounting period ends."
+
+  - name: tor-relay-fleet-keys
+    rules:
+      - alert: TorFleetSigningCertExpiring
+        expr: tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 7 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The signing certificate of {{ $labels.nickname }} ({{ $labels.host }}) expires in {{ $value | humanizeDuration }}"
+          description: "With an offline master key, renew it: tor-relay-setup keys renew. tor stops working as a relay when it expires."
+
+      - alert: TorFleetSigningCertExpiringSoon
+        expr: tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds - time() < 86400
+        labels:
+          severity: critical
+        annotations:
+          summary: "The signing certificate of {{ $labels.nickname }} ({{ $labels.host }}) expires in {{ $value | humanizeDuration }}"
+          description: "Renew it now: tor-relay-setup keys renew."
+
+      - alert: TorFleetFamilyKeyMissing
+        expr: tor_relay_fleet_relay_family_keys_missing > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) lacks the secret key for a configured FamilyId"
+          description: "Copy NAME.secret_family_key into tor's key directory and restart tor."
+
+      - alert: TorFleetFamilyInconsistent
+        expr: tor_relay_fleet_relay_family_consistent == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.nickname }} ({{ $labels.host }}) is not in the fleet's family"
+          description: "Its FamilyId set differs from the fleet majority, so clients may pick it together with another fleet relay. Re-apply the inventory."

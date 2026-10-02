@@ -43,6 +43,10 @@ type Client struct {
 	// LockTimeout is how long apt-get waits for the dpkg lock
 	// (DPkg::Lock::Timeout). Zero means DefaultLockTimeout.
 	LockTimeout time.Duration
+	// NoRecommends installs without recommended packages
+	// (--no-install-recommends), for servers that must not gain extra
+	// listening services.
+	NoRecommends bool
 }
 
 // Error is a failed apt-get run. Hint, when set, tells the user how to fix
@@ -118,8 +122,11 @@ func (c Client) args(subcommand string, pkgs ...string) []string {
 		"-o", "DPkg::Lock::Timeout=" + strconv.Itoa(c.lockSeconds()),
 		"-o", "Dpkg::Options::=--force-confdef",
 		"-o", "Dpkg::Options::=--force-confold",
-		subcommand,
 	}
+	if c.NoRecommends && subcommand == "install" {
+		args = append(args, "--no-install-recommends")
+	}
+	args = append(args, subcommand)
 	return append(args, pkgs...)
 }
 

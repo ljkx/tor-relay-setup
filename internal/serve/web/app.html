@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<meta name="trs-base" content="{{.Base}}">
+<meta name="trs-privacy" content="{{if .Privacy}}1{{else}}0{{end}}">
+<title>Relay fleet · tor-relay-setup</title>
+<link rel="icon" href="{{.Base}}static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{{.Base}}static/app.css">
+<script src="{{.Base}}static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="{{.Base}}">
+    <img src="{{.Base}}static/icon.svg" alt="" width="28" height="28">
+    <span class="brand-name">Relay fleet</span>
+    {{if .Demo}}<span class="badge">demo</span>{{end}}
+    {{if .Privacy}}<span class="badge badge-soft" title="Per-relay traffic and connection counts are hidden">privacy</span>{{end}}
+  </a>
+  <div class="topbar-status" id="status" aria-live="polite">Loading…</div>
+  <form class="logout" method="post" action="{{.Base}}logout">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <span class="muted user">{{.User}}</span>
+    <button type="submit" class="ghost">Sign out</button>
+  </form>
+</header>
+
+<main class="content">
+  <p class="banner" id="banner" hidden></p>
+
+  <section class="cards" id="cards" aria-label="Fleet totals"></section>
+
+  <section class="split">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Fleet traffic</h2>
+        <span class="muted" id="spark-caption">30 days · Tor Metrics</span>
+      </div>
+      <div class="spark" id="spark">
+        <svg id="spark-svg" viewBox="0 0 600 140" preserveAspectRatio="none" role="img" aria-label="Daily fleet traffic"></svg>
+        <div class="spark-tip" id="spark-tip" hidden></div>
+      </div>
+      <div class="spark-foot" id="spark-foot"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Needs attention</h2>
+        <span class="count" id="attention-count"></span>
+      </div>
+      <ul class="attention" id="attention"></ul>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head toolbar">
+      <h2>Relays <span class="muted" id="relay-count"></span></h2>
+      <div class="toolbar-controls">
+        <div class="chips" id="roles" role="group" aria-label="Filter by role">
+          <button type="button" class="chip active" data-role="">All</button>
+          <button type="button" class="chip" data-role="guard">Guard</button>
+          <button type="button" class="chip" data-role="exit">Exit</button>
+          <button type="button" class="chip" data-role="middle">Middle</button>
+          <button type="button" class="chip" data-role="bridge">Bridge</button>
+        </div>
+        <input type="search" id="filter" placeholder="Filter: host, nickname, flag, country…" aria-label="Filter relays" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="relays" id="relays">
+        <thead>
+          <tr>
+            <th data-sort="nickname" scope="col">Relay</th>
+            <th data-sort="role" scope="col" class="opt-sm">Role</th>
+            <th data-sort="state" scope="col">Status</th>
+            <th data-sort="flags" scope="col" class="opt">Flags</th>
+            <th data-sort="live" scope="col" class="num" id="live-head">Live</th>
+            <th data-sort="weight" scope="col" class="num opt">Weight</th>
+            <th data-sort="country" scope="col" class="opt">Location</th>
+            <th data-sort="tor" scope="col" class="opt">Tor</th>
+            <th data-sort="warnings" scope="col" class="num" title="Warnings">⚠</th>
+          </tr>
+        </thead>
+        <tbody id="relay-rows"></tbody>
+      </table>
+      <p class="empty" id="relay-empty" hidden>No relay matches the filter.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Servers</h2><span class="muted" id="host-count"></span></div>
+    <ul class="hosts" id="hosts"></ul>
+  </section>
+
+  <footer class="foot muted">
+    tor-relay-setup {{.Version}} · read-only · refreshes every 15 s
+  </footer>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" aria-labelledby="drawer-title" role="dialog" aria-modal="true" hidden>
+  <div class="drawer-head">
+    <div>
+      <h2 id="drawer-title"></h2>
+      <p class="muted" id="drawer-sub"></p>
+    </div>
+    <button type="button" class="ghost icon" id="drawer-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+</body>
+</html>

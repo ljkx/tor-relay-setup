@@ -59,6 +59,7 @@ type (
 	fleetTickMsg  time.Time
 	fleetDirMsg   struct {
 		details map[string]*onionoo.Relay
+		bridges map[string]*onionoo.Bridge
 		history map[string]*onionoo.Bandwidth
 		err     error
 		at      time.Time
@@ -163,10 +164,10 @@ func (v *fleetView) probeAll() tea.Cmd {
 }
 
 // lookup asks Tor Metrics for every known fingerprint at once: details and
-// traffic history, in bulk requests.
+// traffic history, in bulk requests; bridges by hashed fingerprint only.
 func (v *fleetView) lookup() tea.Cmd {
-	fps := v.model.Fingerprints()
-	if len(fps) == 0 || v.dirLoading {
+	fps, bridges := v.model.Fingerprints(), v.model.BridgeFingerprints()
+	if len(fps)+len(bridges) == 0 || v.dirLoading {
 		return nil
 	}
 	v.dirLoading = true
@@ -174,12 +175,8 @@ func (v *fleetView) lookup() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), fleetDirTimeout)
 		defer cancel()
-		details, err := client.DetailsBulk(ctx, fps)
-		var history map[string]*onionoo.Bandwidth
-		if err == nil {
-			history, _ = client.BandwidthBulk(ctx, fps)
-		}
-		return fleetDirMsg{details: details, history: history, err: err, at: time.Now()}
+		d := fleet.FetchDirectory(ctx, client, fps, bridges, true)
+		return fleetDirMsg{details: d.Details, bridges: d.Bridges, history: d.History, err: d.Err, at: d.At}
 	}
 }
 
@@ -209,8 +206,7 @@ func (v *fleetView) background(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case fleetDirMsg:
 		v.dirLoading = false
-		v.model.SetDirectory(msg.details, msg.err, msg.at)
-		v.model.SetHistory(msg.history)
+		v.model.SetDirectoryResult(fleet.DirectoryResult{Details: msg.details, Bridges: msg.bridges, History: msg.history, Err: msg.err, At: msg.at})
 		if msg.err == nil {
 			return v.saveFlags(msg.details, msg.at), true
 		}

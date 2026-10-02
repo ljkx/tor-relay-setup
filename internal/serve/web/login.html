@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in · tor-relay-setup fleet</title>
+<link rel="icon" href="{{.Base}}static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{{.Base}}static/app.css">
+</head>
+<body class="login-page">
+<main class="login">
+  <div class="login-brand">
+    <img src="{{.Base}}static/icon.svg" alt="" width="40" height="40">
+    <div>
+      <h1>Relay fleet</h1>
+      <p class="muted">tor-relay-setup{{if .Demo}} · <span class="badge">demo</span>{{end}}</p>
+    </div>
+  </div>
+  <form class="login-form" method="post" action="{{.Base}}login" autocomplete="on">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus maxlength="64">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+  {{if .DemoLogin}}
+  <aside class="demo-hint">
+    <strong>Demo mode.</strong> Synthetic fleet, no ssh. Sign in as
+    <code>{{.DemoUser}}</code> with password <code>{{.DemoPassword}}</code>.
+  </aside>
+  {{end}}
+  <p class="login-foot muted">Read-only view. Nothing here changes a relay.</p>
+</main>
+</body>
+</html>

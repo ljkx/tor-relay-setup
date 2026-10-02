@@ -149,7 +149,38 @@ The dashboard and `fleet status` run `tor-relay-setup fleet-probe` on every host
 - **Keys:** `s`/`S` changes the sort, `/` filters, and `enter` opens a relay's details. `R`, `O`, and `U` restart, reload, or update Tor on the relays in view, one at a time, after a confirmation.
 - **Rolling actions** run `tor-relay-setup tor restart|reload|update` on each host, then wait up to two minutes until that relay is active and listening again before moving on. The first failure stops the rollout unless you pass `--keep-going`.
 - **Lost flags** are measured against the previous dashboard run, kept in your cache directory.
-- **Prometheus:** `fleet status --format prometheus` exports fleet totals (`tor_relay_fleet_*`) and per-relay series labelled `host`, `tor_instance`, `nickname`, and `fingerprint`.
+- **Prometheus:** `fleet status --format prometheus` exports fleet totals and per-relay series (`tor_relay_fleet_*`, listed in [`docs/monitoring/fleet-metrics.md`](monitoring/fleet-metrics.md)).
+
+### Grafana for the whole fleet
+
+For a permanent, browser-based view, run the monitoring stack on a small management server: not a relay, 1 GiB of RAM, Debian 12/13 or Ubuntu 22.04/24.04/26.04, with a DNS name pointing at it.
+
+1. **On the management server:** install tor-relay-setup with `install.sh`. Put your inventory at `/etc/tor-relay-setup/fleet.toml`, next to the `relay.toml` it names, readable by the `tor-relay-monitor` user. Write the addresses without `user@`.
+2. **Install the stack:**
+
+   ```bash
+   sudo tor-relay-setup monitor install --domain grafana.example.org --email you@example.org --dry-run
+   sudo tor-relay-setup monitor install --domain grafana.example.org --email you@example.org
+   ```
+
+   It installs fleet serve, Prometheus (loopback only, 400 days of history), Grafana from its signed repository (loopback only, hardened, with the dashboards provisioned) and Caddy (HTTPS with Let's Encrypt). It opens only ports 80 and 443. It prints the Grafana login and the monitoring SSH key, and keeps the generated admin password in `/etc/tor-relay-setup/grafana-admin`.
+3. **On every relay,** allow that key for the read-only probe only, using the management server's address:
+
+   ```bash
+   sudo tor-relay-setup fleet authorize --key 'ssh-ed25519 AAAA… tor-relay-monitor@monitor' --from 203.0.113.5
+   ```
+
+   This creates a `tor-relay-probe` user whose key is locked to one forced command, `sudo -n tor-relay-setup fleet-probe`, by a single sudoers rule. It prints the relay's SSH host key as a `known_hosts` line.
+4. **Back on the management server,** add each printed line to `/var/lib/tor-relay-monitor/.ssh/known_hosts`. Host keys are never accepted blindly. Then check:
+
+   ```bash
+   sudo -u tor-relay-monitor ssh relay1.example.org | head -c 300
+   sudo tor-relay-setup monitor status
+   ```
+
+5. **Open** `https://grafana.example.org/` and sign in as `tor-admin`. *Tor fleet — overview* is the home page, and *Tor fleet — relay detail* shows a single relay. The fleet web view lives at `/fleet/`; add its logins with `sudo tor-relay-setup fleet serve passwd NAME`.
+
+Prometheus evaluates the bundled fleet alert rules, and the overview lists what is firing. Notifications stay with each relay's own `tor-relay-setup alert`. `privacy = true` in `/etc/tor-relay-setup/serve.toml` keeps per-relay traffic out of the metrics, which is worth considering if anyone besides you can see the dashboards. To revoke a management server's access, run `sudo tor-relay-setup fleet authorize --remove` on a relay. The full design is in [`docs/monitoring/README.md`](monitoring/README.md).
 
 ## Monitoring
 

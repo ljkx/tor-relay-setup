@@ -59,6 +59,15 @@ type Relay struct {
 	ORAddresses       []string
 	FamilyIDs         []string // Onionoo "family_ids" (Tor 0.4.9 FamilyId), when published
 
+	// LastRestarted is when the relay last (re)started, like FirstSeen in
+	// Onionoo's "YYYY-MM-DD hh:mm:ss" UTC form (see ParseTime).
+	LastRestarted string `json:",omitempty"`
+	// Country is the lower-case ISO 3166 code of the relay's first OR
+	// address; AS is its autonomous system as "AS1234", ASName its name.
+	Country string `json:",omitempty"`
+	AS      string `json:",omitempty"`
+	ASName  string `json:",omitempty"`
+
 	ExitProbability, GuardProbability, MiddleProbability float64
 
 	// OverloadGeneral is Onionoo's "overload_general_timestamp": the hour
@@ -70,6 +79,16 @@ type Relay struct {
 // OverloadWindow is how long tor keeps publishing overload-general after
 // the last event (dir-spec).
 const OverloadWindow = 72 * time.Hour
+
+// ParseTime reads an Onionoo timestamp ("2026-01-01 00:00:00", UTC). An
+// empty or malformed value is the zero time.
+func ParseTime(s string) time.Time {
+	t, err := time.ParseInLocation(time.DateTime, s, time.UTC)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
 
 // Overloaded reports whether Relay Search shows the relay as overloaded at
 // now.
@@ -163,6 +182,10 @@ type detailsRelay struct {
 	GuardProbability    float64         `json:"guard_probability"`
 	MiddleProbability   float64         `json:"middle_probability"`
 	OverloadGeneralMS   int64           `json:"overload_general_timestamp"` // milliseconds since the epoch
+	LastRestarted       string          `json:"last_restarted"`
+	Country             string          `json:"country"`
+	AS                  string          `json:"as"`
+	ASName              string          `json:"as_name"`
 }
 
 // familyIDs accepts family_ids as a list of strings or a single string and
@@ -223,6 +246,10 @@ func (d detailsRelay) relay() *Relay {
 		Contact:                 d.Contact,
 		ORAddresses:             d.ORAddresses,
 		FamilyIDs:               familyIDs(d.FamilyIDs),
+		LastRestarted:           d.LastRestarted,
+		Country:                 strings.ToLower(d.Country),
+		AS:                      d.AS,
+		ASName:                  d.ASName,
 		ExitProbability:         d.ExitProbability,
 		GuardProbability:        d.GuardProbability,
 		MiddleProbability:       d.MiddleProbability,

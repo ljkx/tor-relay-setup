@@ -233,7 +233,7 @@ func TestFleetStatus(t *testing.T) {
 		"tor_relay_fleet_relays_running 2\n",
 		"tor_relay_fleet_hosts_unreachable 1\n",
 		"tor_relay_fleet_consensus_weight 20\n",
-		`tor_relay_fleet_relay_service_active{host="relay-1",tor_instance="default",nickname="Fleet1",fingerprint="` + strings.Repeat("1", 40) + `"} 1`,
+		`tor_relay_fleet_relay_service_active{host="relay-1",tor_instance="default",nickname="Fleet1",fingerprint="` + strings.Repeat("1", 40) + `",role="middle"} 1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics lack %q:\n%s", want, out)
