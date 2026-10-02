@@ -65,6 +65,7 @@ relay, its configuration decides (`exit` or `middle`). For bridges
 | `relay_overload_general_timestamp_seconds` | | Onionoo's overload_general_timestamp, when set |
 | `relay_accounting_max_bytes`, `relay_accounting_used_bytes`, `relay_accounting_projected_bytes`, `relay_accounting_period_end_timestamp_seconds` | | only with AccountingMax |
 | `relay_signing_cert_expiry_timestamp_seconds` | | ed25519 signing certificate expiry, when known |
+| `relay_master_key_offline` | | 1 when tor cannot renew the signing certificate itself (offline master key); tor renews the others a day before expiry |
 | `relay_family_ids`, `relay_family_keys_missing` | | |
 | `relay_family_consistent` | | 1 when the relay's FamilyId set matches the fleet majority |
 | `relay_bridge_transport_listening` | `transport` | bridges only |

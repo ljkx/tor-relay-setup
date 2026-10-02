@@ -326,8 +326,11 @@ func (m *Model) writeProbe(e *exposition, base []metrics.Label, r *Relay, p *Rel
 		e.gauge("relay_accounting_projected_bytes", "Bytes expected at the end of the accounting period at the pace so far.", float64(a.Projected), base...)
 		e.gauge("relay_accounting_period_end_timestamp_seconds", "End of the current accounting period.", unix(a.PeriodEnd), base...)
 	}
-	if k := rep.Keys; k != nil && !k.CertExpires.IsZero() {
-		e.gauge("relay_signing_cert_expiry_timestamp_seconds", "Expiry of the relay's ed25519 signing certificate.", unix(k.CertExpires), base...)
+	if k := rep.Keys; k != nil {
+		if !k.CertExpires.IsZero() {
+			e.gauge("relay_signing_cert_expiry_timestamp_seconds", "Expiry of the relay's ed25519 signing certificate.", unix(k.CertExpires), base...)
+		}
+		e.gauge("relay_master_key_offline", "1 when tor cannot renew the signing certificate itself: the ed25519 master key is offline (OfflineMasterKey, or not on disk).", b2f(k.Managed()), base...)
 	}
 	if rep.Relay.Configured && !r.IsBridge() {
 		e.gauge("relay_family_ids", "Number of FamilyIds the relay is configured with.", float64(len(rep.Family.IDs)), base...)
