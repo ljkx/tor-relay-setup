@@ -58,6 +58,15 @@ Usage:
                                             needs attention
   tor-relay-setup fleet restart|reload|update-tor [--only HOST[,HOST]] [--yes] [--keep-going]
                                             one relay at a time, waiting until each is back
+  tor-relay-setup fleet serve [--inventory FILE] [--config serve.toml] [--demo]
+                                            read-only service for a management machine: probes the
+                                            fleet on a schedule and serves /metrics, /api/fleet and a
+                                            web UI (default 127.0.0.1:9850; config
+                                            /etc/tor-relay-setup/serve.toml)
+  tor-relay-setup fleet serve passwd USER [--config FILE] [--stdin]
+                                            set a web UI password (argon2id) in serve.toml
+  tor-relay-setup fleet serve token [--config FILE]
+                                            new /metrics bearer token: printed once, its SHA-256 stored
   tor-relay-setup tor restart|reload|update [--yes]
                                             restart and verify, reload, or upgrade tor on this relay
   tor-relay-setup console                   open the operator console
@@ -106,6 +115,8 @@ Flags:
   --master DIR     keys renew: directory with ed25519_master_id_secret_key (unencrypted)
   --from DIR       keys renew: directory with an uploaded signing key and certificate
   --lifetime TIME  keys renew --master: SigningKeyLifetime, e.g. "30 days" (tor's default)
+  --demo           fleet serve: a synthetic fleet, no ssh (fixed demo login on 127.0.0.1)
+  --stdin          fleet serve passwd: read the password from standard input
 
 Several relays on one server (Debian tor instances):
   Each extra relay is a tor instance: tor-instance-create NAME, /etc/tor/instances/NAME/torrc,
@@ -191,6 +202,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	masterDir := fs.String("master", "", "")
 	fromDir := fs.String("from", "", "")
 	lifetime := fs.String("lifetime", "", "")
+	demo := fs.Bool("demo", false, "")
+	readStdin := fs.Bool("stdin", false, "")
 	help := fs.Bool("help", false, "")
 	fs.BoolVar(help, "h", false, "")
 	showVersion := fs.Bool("version", false, "")
@@ -211,6 +224,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		sub = fs.Arg(0)
 		if err := fs.Parse(fs.Args()[1:]); err != nil {
 			return 2
+		}
+	}
+	// fleet serve passwd USER, fleet serve token
+	serveAction, serveUser := "", ""
+	if cmd == "fleet" && sub == "serve" && fs.NArg() > 0 {
+		serveAction = fs.Arg(0)
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return 2
+		}
+		if serveAction == "passwd" && fs.NArg() > 0 {
+			serveUser = fs.Arg(0)
+			if err := fs.Parse(fs.Args()[1:]); err != nil {
+				return 2
+			}
 		}
 	}
 	if *help || cmd == "help" {
@@ -237,6 +264,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		only: *only != "", keepGoing: *keepGoing, remoteApply: remoteApply, rolling: rolling,
 		instance: *instanceName != "", all: *all, check: *check,
 		removeMaster: *removeMaster, renewFlags: *masterDir != "" || *fromDir != "" || *lifetime != "",
+		demo: *demo, stdin: *readStdin, format: *format != "" || *asJSON, serveAction: serveAction, serveUser: serveUser,
 	}); msg != "" {
 		fmt.Fprintln(stderr, msg)
 		return 2
@@ -345,6 +373,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		inst, _ := relay.Named(*instanceName) // validated above; "" is the default
 		err = torCmd(h, sub, torOptions{Yes: *yes, Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout, Instance: inst})
 	case "fleet":
+		if sub == "serve" {
+			return fleetServeCmd(serveOptions{
+				Action: serveAction, User: serveUser, ConfigPath: *cfgPath, Inventory: *inventory, Demo: *demo, Stdin: *readStdin,
+				Terminal: stdinIsTerminal(stdin), In: stdin, Out: stdout, Err: stderr, Onionoo: dir, Local: h, Version: buildVersion(),
+			})
+		}
 		return fleetCmd(fleetOptions{
 			Sub: sub, Inventory: *inventory, Only: *only, Format: outFormat, FormatSet: *format != "" || *asJSON,
 			Yes: *yes, DryRun: *dryRun, KeepGoing: *keepGoing, Interactive: interactive,
@@ -585,6 +619,8 @@ type flagUse struct {
 	remoteApply, rolling                      bool
 	instance, all, check                      bool
 	removeMaster, renewFlags                  bool // keys offline / keys renew flags
+	demo, stdin, format                       bool
+	serveAction, serveUser                    string // fleet serve passwd USER / token
 }
 
 // checkFlagUse rejects flags and subcommands that do not fit the command.
@@ -606,8 +642,20 @@ func checkFlagUse(cmd, sub string, u flagUse) string {
 		return "--only needs apply --inventory, apply --host, or fleet"
 	case u.keepGoing && !u.remoteApply && !u.rolling:
 		return "--keep-going needs --host, --inventory, or a rolling fleet action"
-	case cmd == "fleet" && sub != "" && sub != "status" && !u.rolling:
-		return fmt.Sprintf("unknown fleet command %q: use status, restart, reload, or update-tor", sub)
+	case cmd == "fleet" && sub != "" && sub != "status" && sub != "serve" && !u.rolling:
+		return fmt.Sprintf("unknown fleet command %q: use status, serve, restart, reload, or update-tor", sub)
+	case u.serveAction != "" && u.serveAction != "passwd" && u.serveAction != "token":
+		return fmt.Sprintf("unknown fleet serve command %q: use passwd USER or token", u.serveAction)
+	case u.serveAction == "passwd" && u.serveUser == "":
+		return "fleet serve passwd needs a user name: fleet serve passwd USER"
+	case u.demo && (cmd != "fleet" || sub != "serve" || u.serveAction != ""):
+		return "--demo is only used with fleet serve"
+	case u.stdin && u.serveAction != "passwd":
+		return "--stdin is only used with fleet serve passwd"
+	case sub == "serve" && cmd == "fleet" && (u.only || u.format):
+		return "--only, --format and --json are not used with fleet serve"
+	case sub == "serve" && cmd == "fleet" && u.serveAction != "" && u.inventory:
+		return "--inventory is not used with fleet serve " + u.serveAction
 	case cmd == "tor" && sub != "restart" && sub != "reload" && sub != "update":
 		return "tor needs restart, reload, or update"
 	case cmd == "keys" && sub != "" && sub != "status" && sub != "offline" && sub != "renew":

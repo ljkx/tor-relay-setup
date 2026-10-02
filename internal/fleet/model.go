@@ -768,8 +768,8 @@ func (m *Model) versionDrift() string {
 
 // VersionCount is how many relays run one tor version.
 type VersionCount struct {
-	Version string
-	Count   int
+	Version string `json:"version"`
+	Count   int    `json:"count"`
 }
 
 // TorVersions counts the tor versions in the fleet, most common first.

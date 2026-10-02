@@ -1,0 +1,76 @@
+# tor-relay-setup fleet serve: read-only fleet monitoring for a management
+# machine (never a relay). Default path: /etc/tor-relay-setup/serve.toml.
+#
+# The file holds password and token hashes, so it must not be readable by
+# group or others: chmod 600. Unknown keys are errors.
+#
+#   tor-relay-setup fleet serve passwd alice   # add or change a web UI user
+#   tor-relay-setup fleet serve token          # new /metrics token, shown once
+#   tor-relay-setup fleet serve                # run (see the systemd unit below)
+#   tor-relay-setup fleet serve --demo         # synthetic fleet, no ssh
+
+# Where to listen. Plain HTTP is only allowed on loopback; anything else
+# needs tls_cert/tls_key or acme_domains. The default suits a reverse proxy
+# (Caddy) on the same machine.
+listen = "127.0.0.1:9850"
+
+# Path prefix the browser sees, when the proxy serves the UI under a path
+# (e.g. https://monitor.example.org/fleet/). The proxy may pass the prefix
+# on or strip it; both work. /metrics and /healthz also answer at the root.
+# base_path = "/fleet/"
+
+# The fleet inventory; relative to this file. --inventory overrides it.
+inventory = "fleet.toml"
+
+# How often every host is probed over ssh (fleet-probe, read-only).
+probe_interval = "30s"
+
+# Leave per-relay traffic counters and OR connection counts out of
+# /metrics, the API and the web UI. Fleet totals stay.
+privacy = false
+
+# /metrics needs "Authorization: Bearer TOKEN". Only on a loopback listener
+# may it be opened with metrics_auth = false (e.g. for a local Prometheus).
+# metrics_auth = false
+
+# SHA-256 of the metrics token; written by `fleet serve token`.
+# metrics_token_sha256 = "..."
+
+# Reverse proxies whose X-Forwarded-For and X-Forwarded-Proto are believed
+# (for login rate limiting and Secure cookies). IPs or CIDR ranges.
+trusted_proxies = ["127.0.0.1", "::1"]
+
+# TLS from files (re-read when they change, e.g. after a certbot renewal):
+# tls_cert = "/etc/letsencrypt/live/monitor.example.org/fullchain.pem"
+# tls_key  = "/etc/letsencrypt/live/monitor.example.org/privkey.pem"
+
+# Or Let's Encrypt via TLS-ALPN-01 on the listener itself: Let's Encrypt
+# connects to port 443 of each domain, so listen on ":443" (or forward 443
+# to the listen port). No port 80 handler is used.
+# listen = ":443"
+# acme_domains = ["monitor.example.org"]
+# acme_email = "ops@example.org"
+# acme_cache = "/var/lib/tor-relay-setup/acme"
+
+# Web UI users (argon2id hashes). Set them with `fleet serve passwd NAME`.
+# [[users]]
+# name = "alice"
+# hash = "$argon2id$v=19$m=65536,t=3,p=4$..."
+
+# A systemd unit for a dedicated user that has the ssh keys for the fleet:
+#
+#   [Unit]
+#   Description=tor-relay-setup fleet monitoring
+#   After=network-online.target
+#   Wants=network-online.target
+#
+#   [Service]
+#   User=trs
+#   ExecStart=/usr/local/bin/tor-relay-setup fleet serve --config /etc/tor-relay-setup/serve.toml
+#   Restart=on-failure
+#   NoNewPrivileges=yes
+#   ProtectSystem=strict
+#   ReadWritePaths=/home/trs/.cache /var/lib/tor-relay-setup
+#
+#   [Install]
+#   WantedBy=multi-user.target
