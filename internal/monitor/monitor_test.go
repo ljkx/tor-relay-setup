@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -679,6 +678,13 @@ func TestAuthorizeSteps(t *testing.T) {
 	}
 	if s.Files[SudoersPath] != nil || s.Files[ProbeAuthorizedKey] != nil || !s.Ran("userdel tor-relay-probe") {
 		t.Errorf("remove: %q", s.CommandLines())
+	}
+	// userdel refuses a user with live processes (seen on a real VM: the
+	// systemd --user manager of a probe login), so they are ended first.
+	lines := s.CommandLines()
+	kill, del := slices.Index(lines, "pkill -KILL -u tor-relay-probe"), slices.Index(lines, "userdel tor-relay-probe")
+	if kill < 0 || del < 0 || kill > del || !s.Ran("loginctl terminate-user tor-relay-probe") {
+		t.Errorf("processes not ended before userdel: %q", lines)
 	}
 }
 
