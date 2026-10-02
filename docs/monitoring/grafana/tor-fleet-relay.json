@@ -132,7 +132,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_service_active{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_service_active{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "service",
@@ -214,7 +214,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_listener{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_listener{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{family}}",
@@ -296,7 +296,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_reachable{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_reachable{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{family}}",
@@ -383,7 +383,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "(tor_relay_fleet_relay_published{host=\"$host\", nickname=\"$relay\"} == 0) or (tor_relay_fleet_relay_running{host=\"$host\", nickname=\"$relay\"} + 1)",
+          "expr": "max without (instance, job) ((tor_relay_fleet_relay_published{host=\"$host\", nickname=\"$relay\"} == 0) or (tor_relay_fleet_relay_running{host=\"$host\", nickname=\"$relay\"} + 1))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "consensus",
@@ -450,7 +450,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_info{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_info{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{role}} · tor {{version}}",
@@ -458,7 +458,7 @@
           "refId": "A"
         }
       ],
-      "title": "Role and version",
+      "title": "Role, version",
       "type": "stat"
     },
     {
@@ -517,7 +517,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_info{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_info{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{country}} · {{as}} {{as_name}}",
@@ -631,7 +631,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_flag{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_flag{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{flag}}",
@@ -702,7 +702,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "time() - tor_relay_fleet_relay_last_restarted_timestamp_seconds{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (time() - tor_relay_fleet_relay_last_restarted_timestamp_seconds{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "uptime",
@@ -770,7 +770,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_first_seen_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} * 1000",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_first_seen_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} * 1000)",
           "format": "time_series",
           "instant": false,
           "legendFormat": "first seen",
@@ -872,7 +872,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} - time()",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} - time())",
           "format": "time_series",
           "instant": false,
           "legendFormat": "expires in",
@@ -880,7 +880,7 @@
           "refId": "A"
         }
       ],
-      "title": "Signing certificate",
+      "title": "Cert expiry",
       "type": "stat"
     },
     {
@@ -947,7 +947,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_warnings{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_warnings{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "warnings",
@@ -1015,7 +1015,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_consensus_weight{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_consensus_weight{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "weight",
@@ -1023,7 +1023,7 @@
           "refId": "A"
         }
       ],
-      "title": "Consensus weight",
+      "title": "Weight",
       "type": "stat"
     },
     {
@@ -1084,7 +1084,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_consensus_weight_fraction{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_consensus_weight_fraction{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "share",
@@ -1092,7 +1092,7 @@
           "refId": "A"
         }
       ],
-      "title": "Weight share",
+      "title": "Net share",
       "type": "stat"
     },
     {
@@ -1153,7 +1153,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_guard_probability{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_guard_probability{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "guard",
@@ -1161,7 +1161,7 @@
           "refId": "A"
         }
       ],
-      "title": "Guard probability",
+      "title": "Guard prob.",
       "type": "stat"
     },
     {
@@ -1222,7 +1222,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_middle_probability{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_middle_probability{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "middle",
@@ -1230,7 +1230,7 @@
           "refId": "A"
         }
       ],
-      "title": "Middle probability",
+      "title": "Middle prob.",
       "type": "stat"
     },
     {
@@ -1291,7 +1291,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_exit_probability{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_exit_probability{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "exit",
@@ -1299,7 +1299,7 @@
           "refId": "A"
         }
       ],
-      "title": "Exit probability",
+      "title": "Exit prob.",
       "type": "stat"
     },
     {
@@ -1360,7 +1360,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\", direction=\"read\"}[5m]))",
+          "expr": "max without (instance, job) (sum(rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\", direction=\"read\"}[5m])))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "in",
@@ -1373,7 +1373,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\", direction=\"written\"}[5m]))",
+          "expr": "max without (instance, job) (sum(rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\", direction=\"written\"}[5m])))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "out",
@@ -1381,7 +1381,7 @@
           "refId": "B"
         }
       ],
-      "title": "Throughput now",
+      "title": "Live rate",
       "type": "stat"
     },
     {
@@ -1531,7 +1531,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (direction) (rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]))",
+          "expr": "max without (instance, job) (sum by (direction) (rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval])))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{direction}}",
@@ -1687,7 +1687,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_advertised_bandwidth_bytes{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_advertised_bandwidth_bytes{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "advertised",
@@ -1700,7 +1700,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_observed_bandwidth_bytes{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_observed_bandwidth_bytes{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "observed",
@@ -1713,7 +1713,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\", direction=\"written\"}[$__rate_interval]))",
+          "expr": "max without (instance, job) (sum(rate(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\", direction=\"written\"}[$__rate_interval])))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "used (written)",
@@ -1850,7 +1850,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (direction) (increase(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\"}[1d]))",
+          "expr": "max without (instance, job) (sum by (direction) (increase(tor_relay_fleet_relay_traffic_bytes_total{host=\"$host\", nickname=\"$relay\"}[1d])))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{direction}}",
@@ -1968,7 +1968,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_or_connections{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_or_connections{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "connections",
@@ -2124,7 +2124,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_consensus_weight{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_consensus_weight{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "weight",
@@ -2137,7 +2137,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_consensus_weight_fraction{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_consensus_weight_fraction{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "share",
@@ -2284,7 +2284,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_guard_probability{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_guard_probability{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "guard",
@@ -2297,7 +2297,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_middle_probability{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_middle_probability{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "middle",
@@ -2310,7 +2310,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_exit_probability{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_exit_probability{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "exit",
@@ -2396,7 +2396,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_flag{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_flag{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "{{flag}}",
@@ -2529,7 +2529,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_service_active{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_service_active{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "service active",
@@ -2542,7 +2542,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max(tor_relay_fleet_relay_listener{host=\"$host\", nickname=\"$relay\"})",
+          "expr": "max without (instance, job) (max(tor_relay_fleet_relay_listener{host=\"$host\", nickname=\"$relay\"}))",
           "format": "time_series",
           "instant": false,
           "legendFormat": "ORPort listening",
@@ -2555,7 +2555,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_reachable{host=\"$host\", nickname=\"$relay\", family=\"ipv4\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_reachable{host=\"$host\", nickname=\"$relay\", family=\"ipv4\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "reachable (IPv4)",
@@ -2568,7 +2568,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_published{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_published{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "listed by Tor Metrics",
@@ -2581,7 +2581,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_running{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_running{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "running in consensus",
@@ -2594,7 +2594,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_family_consistent{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_family_consistent{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "family consistent",
@@ -2607,7 +2607,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_overloaded{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_overloaded{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "overloaded",
@@ -2719,7 +2719,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_warnings{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_warnings{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "warnings",
@@ -2860,7 +2860,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_sockets_open{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_sockets_open{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "open",
@@ -2873,7 +2873,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "tor_relay_fleet_relay_sockets_limit{host=\"$host\", nickname=\"$relay\"}",
+          "expr": "max without (instance, job) (tor_relay_fleet_relay_sockets_limit{host=\"$host\", nickname=\"$relay\"})",
           "format": "time_series",
           "instant": false,
           "legendFormat": "limit",
@@ -2983,7 +2983,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "sum by (type) (rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", action=\"processed\"}[$__rate_interval]))",
+              "expr": "max without (instance, job) (sum by (type) (rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", action=\"processed\"}[$__rate_interval])))",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{type}}",
@@ -3083,7 +3083,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "sum by (type) (rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", action=\"dropped\"}[$__rate_interval]))",
+              "expr": "max without (instance, job) (sum by (type) (rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", action=\"dropped\"}[$__rate_interval])))",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{type}}",
@@ -3200,7 +3200,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "sum(rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", type=~\"ntor|ntor_v3\", action=\"dropped\"}[$__rate_interval])) / sum(rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", type=~\"ntor|ntor_v3\"}[$__rate_interval]))",
+              "expr": "max without (instance, job) (sum(rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", type=~\"ntor|ntor_v3\", action=\"dropped\"}[$__rate_interval])) / sum(rate(tor_relay_fleet_relay_onionskins_total{host=\"$host\", nickname=\"$relay\", type=~\"ntor|ntor_v3\"}[$__rate_interval])))",
               "format": "time_series",
               "instant": false,
               "legendFormat": "drop ratio",
@@ -3295,7 +3295,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "sum by (subsys) (rate(tor_relay_fleet_relay_oom_bytes_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]) * 3600)",
+              "expr": "max without (instance, job) (sum by (subsys) (rate(tor_relay_fleet_relay_oom_bytes_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]) * 3600))",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{subsys}}",
@@ -3406,7 +3406,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "rate(tor_relay_fleet_relay_tcp_exhaustion_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]) * 3600",
+              "expr": "max without (instance, job) (rate(tor_relay_fleet_relay_tcp_exhaustion_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]) * 3600)",
               "format": "time_series",
               "instant": false,
               "legendFormat": "events",
@@ -3501,7 +3501,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "sum by (side) (rate(tor_relay_fleet_relay_rate_limit_reached_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]) * 3600)",
+              "expr": "max without (instance, job) (sum by (side) (rate(tor_relay_fleet_relay_rate_limit_reached_total{host=\"$host\", nickname=\"$relay\"}[$__rate_interval]) * 3600))",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{side}}",
@@ -3570,7 +3570,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_overload_general_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} * 1000",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_overload_general_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} * 1000)",
               "format": "time_series",
               "instant": false,
               "legendFormat": "last",
@@ -3578,7 +3578,7 @@
               "refId": "A"
             }
           ],
-          "title": "Last overload-general",
+          "title": "Last overload",
           "type": "stat"
         }
       ],
@@ -3757,7 +3757,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_accounting_used_bytes{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_accounting_used_bytes{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "used",
@@ -3770,7 +3770,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_accounting_projected_bytes{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_accounting_projected_bytes{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "projected",
@@ -3783,7 +3783,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_accounting_max_bytes{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_accounting_max_bytes{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "limit",
@@ -3860,7 +3860,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_accounting_used_bytes{host=\"$host\", nickname=\"$relay\"} / tor_relay_fleet_relay_accounting_max_bytes{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_accounting_used_bytes{host=\"$host\", nickname=\"$relay\"} / tor_relay_fleet_relay_accounting_max_bytes{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "used",
@@ -3929,7 +3929,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_accounting_period_end_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} - time()",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_accounting_period_end_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} - time())",
               "format": "time_series",
               "instant": false,
               "legendFormat": "ends in",
@@ -4011,7 +4011,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_family_ids{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_family_ids{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "ids",
@@ -4082,7 +4082,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_family_keys_missing{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_family_keys_missing{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "missing",
@@ -4090,7 +4090,7 @@
               "refId": "A"
             }
           ],
-          "title": "Missing family keys",
+          "title": "Missing keys",
           "type": "stat"
         },
         {
@@ -4164,7 +4164,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_family_consistent{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_family_consistent{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "family",
@@ -4257,7 +4257,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_bridge_transport_listening{host=\"$host\", nickname=\"$relay\"}",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_bridge_transport_listening{host=\"$host\", nickname=\"$relay\"})",
               "format": "time_series",
               "instant": false,
               "legendFormat": "{{transport}}",
@@ -4265,7 +4265,7 @@
               "refId": "A"
             }
           ],
-          "title": "Bridge transport",
+          "title": "Transport",
           "type": "stat"
         },
         {
@@ -4403,7 +4403,7 @@
                 "uid": "${datasource}"
               },
               "editorMode": "code",
-              "expr": "tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} - time()",
+              "expr": "max without (instance, job) (tor_relay_fleet_relay_signing_cert_expiry_timestamp_seconds{host=\"$host\", nickname=\"$relay\"} - time())",
               "format": "time_series",
               "instant": false,
               "legendFormat": "valid for",

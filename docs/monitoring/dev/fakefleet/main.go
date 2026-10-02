@@ -324,8 +324,10 @@ func render(now time.Time, privacy bool) string {
 		if r.accounting {
 			period := 30 * 86400.0
 			elapsed := math.Mod(unix, period)
-			max := 8e12
+			// Budgets a real relay would have: one paced close to its cap
+			// (about 95% projected), one with room to spare (about 70%).
 			used := r.bw * elapsed * 2
+			max := r.bw * 2 * period * (1.05 + 0.38*float64(i%2))
 			w.metric("relay_accounting_max_bytes", "gauge", "AccountingMax.")
 			w.sample("relay_accounting_max_bytes", l, max)
 			w.metric("relay_accounting_used_bytes", "gauge", "Used this period.")

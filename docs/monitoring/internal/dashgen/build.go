@@ -7,6 +7,7 @@ package dashgen
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // Tor's brand colours (https://styleguide.torproject.org/).
@@ -62,13 +63,24 @@ type Q struct {
 	Hide         bool
 }
 
+// dedupe drops the scrape target's own labels, so one relay or fleet
+// total stays one line when Prometheus scrapes fleet serve under more
+// than one job or address (a moved target, a second Prometheus job, or
+// backfilled history without them). Everything else is kept.
+func dedupe(expr string) string {
+	if strings.HasPrefix(expr, "max without (instance, job) (") {
+		return expr
+	}
+	return "max without (instance, job) (" + expr + ")"
+}
+
 func targets(qs []Q) []any {
 	out := make([]any, len(qs))
 	for i, q := range qs {
 		t := M{
 			"refId":        string(rune('A' + i)),
 			"datasource":   ds,
-			"expr":         q.Expr,
+			"expr":         dedupe(q.Expr),
 			"legendFormat": q.Legend,
 			"range":        !q.Instant,
 			"instant":      q.Instant,

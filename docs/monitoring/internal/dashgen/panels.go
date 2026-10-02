@@ -18,6 +18,13 @@ func Stat(title, desc string, w int, f Field, qs ...Q) Panel {
 	}
 }
 
+// NoGraph turns off a stat's sparkline, for stats that show several values
+// side by side, where the sparklines would crowd the numbers.
+func NoGraph(p Panel) Panel {
+	p.Options["graphMode"] = "none"
+	return p
+}
+
 // StatNamed shows each series' name (legend) as the value: labels such as
 // the tor version or flags.
 func StatNamed(title, desc string, w int, f Field, qs ...Q) Panel {
@@ -103,7 +110,8 @@ func BarGauge(title, desc string, w, h int, f Field, qs ...Q) Panel {
 		Type: "bargauge", Title: title, Desc: desc, W: w, H: h, Targets: qs, Field: f,
 		Options: M{
 			"reduceOptions": reduce("lastNotNull"), "orientation": "horizontal", "displayMode": "gradient",
-			"valueMode": "color", "namePlacement": "auto", "showUnfilled": true, "sizing": "auto",
+			"valueMode": "color", "namePlacement": "left", "showUnfilled": true, "sizing": "auto",
+			"text":         M{"titleSize": 13, "valueSize": 16},
 			"minVizHeight": 16, "minVizWidth": 8, "maxVizHeight": 36,
 			"legend": M{"displayMode": "list", "placement": "bottom", "showLegend": false, "calcs": []string{}},
 		},
