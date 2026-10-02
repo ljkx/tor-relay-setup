@@ -82,22 +82,74 @@ sudo tor-relay-setup apply --config relay.toml --yes   # unattended
 
 Keep one file per relay in version control. The only values that should differ between relays are the nickname and, for family members, `family.mode = "import"` with the key path.
 
-### Several relays from your workstation
+## Several relays on one server
 
-`apply --host` runs the same file on remote servers through your own `ssh` and `scp`, one host after another:
+A large server can run several relays: the directory authorities accept up to [eight relays per IPv4 address](https://community.torproject.org/relay/relays-requirements/). Each extra relay is a Debian tor instance created with `tor-instance-create`. It has its own torrc (`/etc/tor/instances/NAME/torrc`), user (`_tor-NAME`), data directory (`/var/lib/tor-instances/NAME`), and unit (`tor@NAME`).
 
-```bash
-tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2 --dry-run
-tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2
+- **Add one:** press **`n`** in the console, or apply a config with `relay.instance = "NAME"` (or `--instance NAME`). Names are letters and digits only.
+- **What is chosen for you:** the next free ORPort, a MetricsPort from 9036 upwards, a numbered nickname, and the same contact. Two relays on one server must not draw from the same monthly quota twice, so quota-based limits are not copied; set each relay's share yourself.
+- **Family:** every relay on a server shares one family key. The tool copies the existing key into the new instance and refuses to create a second family.
+- **Checks:** apply refuses ORPort and MetricsPort collisions with the server's other relays, warns above eight relays, and scales the memory check with the number of relays.
+- **Console:** with several relays you get an all-relays health line and a relay switcher (`[` `]`, or `1`–`9`). Every card and action works on the selected relay.
+- **Status:** `status --instance NAME` reports one relay and `status --all` reports all of them (JSON is then an array). Prometheus samples carry a `tor_instance` label.
+
+### Kernel tuning for fast relays
+
+For relays expecting more than about 100 Mbit/s, the System step offers `system.tuning`. It writes `/etc/sysctl.d/60-tor-relay.conf` with each value's reason as a comment:
+- a wider ephemeral port range (`15000 64000`), against the TCP port exhaustion Tor's [overload guide](https://support.torproject.org/relays/performance/overloaded/) describes;
+- a larger connection-tracking table, only when `nf_conntrack` is loaded.
+
+It only ever widens what the kernel already uses. If the installed tor unit allows fewer than 65536 open files, it also adds a systemd drop-in that raises the limit.
+
+## Fleets
+
+A fleet inventory describes every relay you run. Start from [`docs/examples/fleet.toml`](examples/fleet.toml):
+
+```toml
+config = "relay.toml"      # base relay.toml, relative to this file
+parallel = 8               # servers applied at once after the family host
+nickname = "MyRelay{n}"    # {n} = position, {host} = short hostname
+
+[[host]]
+address = "root@relay1.example.org"
+
+[[host]]
+address = "admin@relay2.example.org"
+relay = { ipv6 = "2001:db8::2", or_port = 443 }
+
+[[host]]
+address = "root@big1.example.org"
+relay = { instance = "relay2", or_port = 9002 }   # a second relay on a server
 ```
 
-- Your `~/.ssh/config`, keys, jump hosts, and `known_hosts` apply. Ports and other options belong in `~/.ssh/config`; `--host` accepts only `[user@]host`.
-- Each host must have the same CPU architecture as your workstation, because it gets a copy of this binary. Each host also gets the config, in a private temporary directory removed afterwards.
-- The remote user must be root or have passwordless `sudo`, since the remote side runs without a terminal.
-- With `family.mode = "generate"`, the first host creates the family key, and every other host imports it. If the first host fails, the rest are skipped so the fleet never ends up in separate families. With `import`, the local key file is uploaded to every host.
-- `--keep-going` continues after a failed host (except the family host) and prints a summary at the end.
+Any `relay.toml` table can be overridden per host, merged key by key. Before the first connection, the tool checks every merged config, that nicknames are unique, and that no server lists the same relay or ORPort twice.
 
-The nickname comes from the file, so give each relay its own copy, or rename relays afterwards with **console → Edit settings**.
+```bash
+tor-relay-setup apply --inventory fleet.toml --dry-run
+tor-relay-setup apply --inventory fleet.toml --only relay2   # just some relays
+```
+
+- **SSH:** your `~/.ssh/config`, keys, jump hosts, and `known_hosts` apply, and connections are shared per host for the run. Ports and other options belong in `~/.ssh/config`; addresses are `[user@]host` only.
+- **Remote user:** must be root or have passwordless `sudo`, since the remote side runs without a terminal. Each host must have the same CPU architecture as your workstation, because it gets a copy of this binary for the run.
+- **Family:** with `family.mode = "generate"`, the first relay runs alone and creates the family key. The rest then import it, `parallel` servers at a time, with relays on the same server one after another. If the family host fails, the rest are skipped, so the fleet never ends up in separate families.
+- **Failures:** `--keep-going` continues after a failed host (except the family host). A summary table ends every run.
+- **One-off runs:** `apply --config relay.toml --host … --host …` still works, but every host then gets the same nickname.
+
+### The fleet dashboard
+
+```bash
+tor-relay-setup fleet                    # dashboard (reads ./fleet.toml, or --inventory FILE)
+tor-relay-setup fleet status --format json
+tor-relay-setup fleet restart --yes      # also: reload, update-tor
+```
+
+The dashboard and `fleet status` run `tor-relay-setup fleet-probe` on every host over SSH, so install the tool on each relay with `install.sh`. Hosts without it, or with an older version, are shown as such.
+
+- **Refresh:** relays are probed every 10 seconds, 16 at a time. Tor Metrics is asked about the whole fleet at once every 30 minutes.
+- **Keys:** `s`/`S` changes the sort, `/` filters, and `enter` opens a relay's details. `R`, `O`, and `U` restart, reload, or update Tor on the relays in view, one at a time, after a confirmation.
+- **Rolling actions** run `tor-relay-setup tor restart|reload|update` on each host, then wait up to two minutes until that relay is active and listening again before moving on. The first failure stops the rollout unless you pass `--keep-going`.
+- **Lost flags** are measured against the previous dashboard run, kept in your cache directory.
+- **Prometheus:** `fleet status --format prometheus` exports fleet totals (`tor_relay_fleet_*`) and per-relay series labelled `host`, `tor_instance`, `nickname`, and `fingerprint`.
 
 ## Monitoring
 
@@ -121,6 +173,11 @@ The nickname comes from the file, so give each relay its own copy, or rename rel
   ```
 
   Enable it with `sudo systemctl enable --now tor-relay-metrics.timer`.
+- **Alerts:** `sudo tor-relay-setup alert install` adds a systemd timer that runs `alert run` every five minutes (`--every` changes that). Notifiers and thresholds live in `/etc/tor-relay-setup/alerts.toml`, mode `600` because it may hold tokens; see [the example](monitoring/alerts.toml). `alert test` sends a test message, and `alert run --dry-run` shows what would be sent.
+  - **Notifiers:** ntfy, webhooks (JSON, or Slack-compatible), email through the local `sendmail`, or any command, which gets the alert as JSON on stdin.
+  - **What it watches:** service stopped, ORPort unreachable, unsupported tor, a missing family key, the relay missing from the consensus or not running in Tor Metrics, lost flags, Tor's overload signals, Relay Search's overloaded mark, and an accounting budget that will run out before the period ends.
+  - **When it notifies:** when a problem appears, then every `remind_every` (24 hours by default) while it lasts, and once when it resolves. If Tor Metrics or the MetricsPort can't be reached, the alerts that depend on them keep their state instead of resolving.
+- **Grafana and Prometheus:** [`docs/monitoring/`](monitoring/README.md) has scrape configurations, alerting rules, and a Grafana dashboard.
 - **Nyx:** `sudo -u debian-tor nyx`
 - **MetricsPort:** if enabled, Prometheus metrics are served on `127.0.0.1:9035`, reachable from the server only:
 
@@ -156,7 +213,10 @@ Read [Tor's exit guidelines](https://community.torproject.org/relay/community-re
 | No "reachable from the outside" line | The ORPort is blocked. Check `ufw status`, the provider's cloud firewall or security group, and NAT. The console's Health card shows whether tor is listening. |
 | IPv6 address never published | The wizard shows how many IPv6 directory authorities answered. Check that the provider firewall allows inbound IPv6 on the ORPort. If it keeps failing, reconfigure without IPv6. |
 | `FamilyId … key missing` | The key file is missing from the key directory or has the wrong owner. Re-import it. Files must be owned by `debian-tor` with mode `600`. |
-| Relay hibernates mid-month | The quota is too small for the configured rate. Raise the headroom in **Edit settings**. |
+| Relay hibernates mid-month | The quota is too small for the configured rate. Raise the headroom in **Edit settings**. `alert` warns when the budget is on course to run out early. |
+| Relay Search shows "overloaded" | Tor publishes this for 72 hours after it ran out of memory for queues, ran out of TCP ports, or dropped at least 1% of circuit handshakes. The console's Traffic card and `alert` name the signal and its remedy: add RAM or set `MaxMemInQueues`, enable kernel tuning, or lower the bandwidth limit. |
+| A fleet host shows "too old" or "not installed" | The dashboard needs tor-relay-setup on each host. Run `install.sh` there, or `sudo tor-relay-setup self-update`. |
+| A fleet relay shows thin data (no fingerprint, no keys) | The remote user has no passwordless `sudo`, so `fleet-probe` ran unprivileged. |
 | `tor X is older than 0.4.9` | The package came from the distribution instead of the Tor repository. Run **console → Reconfigure (`w`)** to repair the repository, then **Update Tor (`u`)**. |
 | Tor apt suite missing | The Tor repository does not publish your codename yet. Use a supported release. |
 | apt "Could not get lock" | Another apt process (often unattended-upgrades on a fresh VPS) holds the lock. The tool waits up to five minutes on its own; otherwise wait and retry. |

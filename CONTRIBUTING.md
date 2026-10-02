@@ -20,18 +20,21 @@ cmd/tor-relay-setup     CLI: subcommands, flags, root checks, status output
 internal/host           the only code that runs commands or writes files (Local, DryRun, Fake)
 internal/plan           Setup + Facts -> ordered Steps; the executor emits events
 internal/config         relay.toml model, validation, reading an existing torrc back into answers
-internal/relay          torrc model and rendering, validators, quota pacing, CIISS, self-test parsing, tor --verify-config
+internal/relay          torrc model and rendering, validators, quota pacing, CIISS, self-test parsing, tor --verify-config, Debian tor instances
 internal/torproject     signing-key verification, deb822 source, candidate origin, version floor
 internal/apt            one-transaction apt with APT::Status-Fd progress and lock waiting
 internal/system         concurrent fact detection, firewall commands, /proc listeners, IPv6 reachability
 internal/family         FamilyId keys: validate, generate with tor, install, list
 internal/service        systemctl and journalctl, reachability wait, family warnings
 internal/onionoo        Tor Metrics client: details, search, bandwidth history
-internal/metrics        MetricsPort scraper behind the console's live traffic
+internal/metrics        MetricsPort scraper, overload assessment, accounting from tor's state file
+internal/alert          alert rules, transition state, and notifiers (ntfy, webhook, sendmail, command)
 internal/status         the health report behind the console and status (text, JSON, Prometheus)
 internal/update         self-update and the cached "newer release" check
-internal/remote         apply --host: ssh/scp fleet runs with family key hand-off
-internal/tui            Bubble Tea v2 app: wizard (huh forms), review, apply, console
+internal/remote         ssh/scp fleet runs: parallel apply with family key hand-off, fleet probes, rolling actions
+internal/fleet          fleet.toml inventory, fleet-probe document, aggregation and checks, fleet status output
+internal/torctl         restart/reload/update of a tor instance, shared by the console, `tor` and fleet rollouts
+internal/tui            Bubble Tea v2 app: wizard (huh forms), review, apply, console, fleet dashboard
 internal/integration    real-system test, containers only
 docs/demo/fakerelay     stand-in MetricsPort and Onionoo for the demo recordings
 ```
