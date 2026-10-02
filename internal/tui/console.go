@@ -87,7 +87,7 @@ func newConsole() *console {
 		}},
 		{"e", "Edit settings", "Nickname, contact, bandwidth, metrics", newEditView},
 		{"s", "Restart Tor", "Restart and verify the service", func(a *App, c *console) (screen, tea.Cmd) {
-			return newTask(a, c, "Restart Tor", restartTask(false))
+			return newTask(a, c, "Restart Tor", restartTask())
 		}},
 		{"o", "Reload Tor", "Re-read torrc without a restart", func(a *App, c *console) (screen, tea.Cmd) {
 			return newTask(a, c, "Reload Tor", reloadTask())

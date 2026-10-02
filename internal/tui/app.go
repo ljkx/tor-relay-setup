@@ -29,6 +29,9 @@ type Options struct {
 	Onionoo onionoo.Client
 	// UpdateCheck shows a header hint when a newer release exists.
 	UpdateCheck bool
+	// NoChecks skips the background checks of this machine (the fleet
+	// dashboard looks at other servers).
+	NoChecks bool
 }
 
 // stateDir holds the cached update check (and the setup state).
@@ -78,9 +81,10 @@ type App struct {
 	done   bool
 	toast  string
 	latest string // a newer release, when the update check found one
-	// console, once started, keeps receiving its background updates while
-	// another view is on screen.
+	// console and fleet, once started, keep receiving their background
+	// updates while another view is on screen.
 	console *console
+	fleet   *fleetView
 }
 
 func newApp(opt Options, first screen) *App {
@@ -92,7 +96,10 @@ func newApp(opt Options, first screen) *App {
 
 // Init starts background work: terminal colours, the spinner, and probes.
 func (a *App) Init() tea.Cmd {
-	cmds := []tea.Cmd{tea.RequestBackgroundColor, a.spin.Tick, detectFacts(a.opt.Host)}
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, a.spin.Tick}
+	if !a.opt.NoChecks {
+		cmds = append(cmds, detectFacts(a.opt.Host))
+	}
 	if a.opt.UpdateCheck {
 		cmds = append(cmds, checkUpdate)
 	}
@@ -138,6 +145,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(append(cmds, cmd)...)
 		}
 	}
+	if f := a.fleet; f != nil && a.screen != screen(f) {
+		if cmd, ok := f.background(a, msg); ok {
+			return a, tea.Batch(append(cmds, cmd)...)
+		}
+	}
 	next, cmd := a.screen.update(a, msg)
 	a.screen = next
 	cmds = append(cmds, cmd)
@@ -148,6 +160,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) View() tea.View {
 	t := a.theme
 	right := a.checks.Facts.Hostname
+	if s, ok := a.screen.(interface{ headerRight() string }); ok {
+		right = s.headerRight()
+	}
 	if a.opt.DryRun {
 		right = t.Badge.Render("DRY RUN") + "  " + right
 	}

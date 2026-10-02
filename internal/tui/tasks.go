@@ -15,11 +15,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/ljkx/tor-relay-setup/internal/apt"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/service"
-	"github.com/ljkx/tor-relay-setup/internal/torproject"
+	"github.com/ljkx/tor-relay-setup/internal/torctl"
 )
 
 // taskFunc does one console job, reporting output lines and progress.
@@ -40,7 +39,8 @@ type (
 // task runs a taskFunc in the background and shows its output.
 type task struct {
 	title   string
-	back    *console
+	back    screen
+	onBack  func(a *App) tea.Cmd // refreshes the screen it returns to
 	lines   []string
 	running bool
 	pct     float64
@@ -53,7 +53,12 @@ type task struct {
 }
 
 func newTask(a *App, back *console, title string, fn taskFunc) (screen, tea.Cmd) {
-	t := &task{title: title, back: back, running: true, events: make(chan tea.Msg, 256), started: time.Now()}
+	return runTask(a, back, back.refresh, title, fn)
+}
+
+// runTask runs fn and returns to back, calling onBack, when it is done.
+func runTask(a *App, back screen, onBack func(*App) tea.Cmd, title string, fn taskFunc) (screen, tea.Cmd) {
+	t := &task{title: title, back: back, onBack: onBack, running: true, events: make(chan tea.Msg, 256), started: time.Now()}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
 	events := t.events
@@ -112,7 +117,7 @@ func (t *task) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 		if !t.running {
 			switch msg.String() {
 			case "enter", "esc", "q", "backspace":
-				return t.back, t.back.refresh(a)
+				return t.back, t.onBack(a)
 			}
 		}
 	}
@@ -160,6 +165,9 @@ func (t *task) view(a *App) string {
 func (t *task) keys(a *App) []string {
 	if t.running {
 		return []string{"ctrl+c", "abort"}
+	}
+	if _, ok := t.back.(*fleetView); ok {
+		return []string{"enter", "back to the fleet"}
 	}
 	return []string{"enter", "back to console"}
 }
@@ -209,31 +217,9 @@ func writeTorrc(ctx context.Context, h host.Host, data []byte, restart bool, out
 	return nil
 }
 
-func restartTask(_ bool) taskFunc {
+func restartTask() taskFunc {
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-		tor := service.Tor{Host: h, Unit: service.DefaultUnit}
-		since := time.Now()
-		progress(10, "restarting")
-		if err := tor.Restart(ctx); err != nil {
-			return "", err
-		}
-		if h.DryRun() {
-			return "Dry run: Tor was not restarted.", nil
-		}
-		progress(50, "waiting for the service")
-		deadline := time.Now().Add(15 * time.Second)
-		for !tor.Active(ctx) {
-			if time.Now().After(deadline) {
-				return "", errors.New(service.DefaultUnit + " did not come back; check the log")
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		if w, _ := tor.FamilyWarnings(ctx, since); len(w) > 0 {
-			for _, line := range w {
-				out(line)
-			}
-		}
-		return "Tor restarted. Reachability is re-tested in the background; refresh the console in a minute.", nil
+		return torctl.Ops{Host: h}.Restart(ctx, out, progress)
 	}
 }
 
@@ -261,42 +247,13 @@ func startTask() taskFunc {
 
 func reloadTask() taskFunc {
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-		progress(20, "tor --verify-config")
-		if err := relay.Verify(ctx, h, torrcPath); err != nil && !errors.Is(err, relay.ErrTorMissing) {
-			return "", fmt.Errorf("torrc is invalid, not reloading: %w", err)
-		}
-		progress(60, "reloading")
-		if err := (service.Tor{Host: h, Unit: service.DefaultUnit}).Reload(ctx); err != nil {
-			return "", err
-		}
-		return "Tor re-read its configuration.", nil
+		return torctl.Ops{Host: h}.Reload(ctx, out, progress)
 	}
 }
 
 func updateTask() taskFunc {
 	return func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-		c := apt.Client{Host: h}
-		if err := c.Update(ctx, func(p apt.Progress) { progress(p.Percent*0.3, p.Detail) }, out); err != nil {
-			return "", err
-		}
-		policy, err := c.Policy(ctx, "tor")
-		if err != nil {
-			return "", err
-		}
-		if !h.DryRun() && !torproject.CandidateFromTorProject(policy) {
-			return "", errors.New("the tor candidate does not come from deb.torproject.org; use Reconfigure to repair the repository")
-		}
-		if err := c.Install(ctx, []string{"tor", "deb.torproject.org-keyring"}, func(p apt.Progress) {
-			progress(30+p.Percent*0.7, p.Detail)
-		}, out); err != nil {
-			return "", err
-		}
-		res, err := h.Run(ctx, host.Command{Name: "tor", Args: []string{"--version"}})
-		if err != nil {
-			return "Updated.", nil
-		}
-		v, _ := torproject.ParseTorVersion(res.Output)
-		return "tor " + v + " is installed.", nil
+		return torctl.Ops{Host: h}.Update(ctx, out, progress)
 	}
 }
 

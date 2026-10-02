@@ -323,7 +323,7 @@ func TestFleetArchMismatchFailsFast(t *testing.T) {
 		t.Errorf("calls = %s", got)
 	}
 	out := f.out.String()
-	if !strings.Contains(out, "relay-3  skipped  stopped after an earlier failure (--keep-going continues)") {
+	if !strings.Contains(out, "relay-3  FleetRelay  skipped  stopped after an earlier failure (--keep-going continues)") {
 		t.Errorf("summary:\n%s", out)
 	}
 }
@@ -346,10 +346,10 @@ func TestFleetKeepGoing(t *testing.T) {
 	for _, want := range []string{
 		"[relay-1]       FAILED: boom",
 		"[relay-1] FAILED: remote apply failed with exit status 1",
-		"  HOST     RESULT",
-		"  relay-1  failed  remote apply failed with exit status 1",
-		"  relay-2  ok",
-		"  relay-3  ok",
+		"  HOST     RELAY       RESULT",
+		"  relay-1  FleetRelay  failed  remote apply failed with exit status 1",
+		"  relay-2  FleetRelay  ok",
+		"  relay-3  FleetRelay  ok",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
