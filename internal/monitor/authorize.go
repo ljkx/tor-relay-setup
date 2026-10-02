@@ -303,6 +303,13 @@ func removeProbeStep() plan.Step {
 				}
 			}
 			if userExists(ctx, h, ProbeUser) {
+				// An ssh login leaves processes behind for a while (the
+				// user's systemd --user manager, a probe still running),
+				// and userdel refuses a user with live processes. Access is
+				// already gone with the files above, so end them first.
+				// Both commands fail harmlessly when there is nothing to end.
+				_, _ = h.Run(ctx, host.Command{Name: "loginctl", Args: []string{"terminate-user", ProbeUser}, Mutates: true})
+				_, _ = h.Run(ctx, host.Command{Name: "pkill", Args: []string{"-KILL", "-u", ProbeUser}, Mutates: true})
 				if _, err := h.Run(ctx, host.Command{Name: "userdel", Args: []string{ProbeUser}, Mutates: true}); err != nil {
 					return err
 				}
