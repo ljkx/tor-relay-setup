@@ -155,6 +155,22 @@ The dashboard and `fleet status` run `tor-relay-setup fleet-probe` on every host
 
 For a permanent, browser-based view, run the monitoring stack on a small management server: not a relay, 1 GiB of RAM, Debian 12/13 or Ubuntu 22.04/24.04/26.04, with a DNS name pointing at it.
 
+**No spare server?** Run it on one of your **non-exit** relays with `monitor install --local`.
+- **What changes:** Grafana and Prometheus listen on localhost only. There is no web server and no domain, and no port is opened.
+- **How you open it:** through an SSH tunnel, `ssh -N -L 3000:127.0.0.1:3000 you@relay` (or Termius port forwarding: local 3000 to `127.0.0.1:3000`), then `http://localhost:3000`.
+- **Exits:** `--local` refuses to run on an exit.
+- **Inventory:** with only existing relays to watch, the inventory can be monitoring-only. Leave out `config` and list just the addresses:
+
+  ```toml
+  [[host]]
+  address = "relay1.example.org"
+
+  [[host]]
+  address = "relay2.example.org"
+  ```
+
+Otherwise, for a dedicated management server:
+
 1. **On the management server:** install tor-relay-setup with `install.sh`. Put your inventory at `/etc/tor-relay-setup/fleet.toml`, next to the `relay.toml` it names, readable by the `tor-relay-monitor` user. Write the addresses without `user@`.
 2. **Install the stack:**
 

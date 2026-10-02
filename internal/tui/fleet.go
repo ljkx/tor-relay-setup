@@ -15,6 +15,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/fleet"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
+	"github.com/ljkx/tor-relay-setup/internal/status"
 )
 
 // FleetOptions configures the fleet dashboard.
@@ -772,14 +773,21 @@ func (v *fleetView) detailView(a *App, r *fleet.Relay, w int) string {
 			fp = fp[:8] + "…" + fp[len(fp)-8:]
 		}
 		relayRows = append(relayRows, [2]string{"Fingerprint", fp})
-		reach := t.Subtle.Render("no self-test in the last 24 h")
-		switch {
+		// tor self-tests only at startup; running in the consensus counts.
+		withDir := rep
+		if withDir.Directory == nil {
+			withDir.Directory = v.model.DirectoryOf(r)
+		}
+		reach := t.Subtle.Render("not tested since startup")
+		switch verdict, _ := withDir.ReachabilityVerdict(); {
 		case rep.Reachability.IPv4 && rep.Reachability.IPv6:
 			reach = statusIcon(t, true, false) + " reachable (IPv4 + IPv6)"
 		case rep.Reachability.IPv4:
 			reach = statusIcon(t, true, false) + " reachable"
-		case rep.Reachability.Failed:
+		case verdict == status.ReachNo:
 			reach = statusIcon(t, false, false) + " not reachable from outside"
+		case verdict == status.ReachYes:
+			reach = statusIcon(t, true, false) + " reachable (in consensus)"
 		}
 		version := rep.Tor.Version
 		if version == "" {

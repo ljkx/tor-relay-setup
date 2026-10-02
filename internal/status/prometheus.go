@@ -83,8 +83,8 @@ func WritePrometheusAll(w io.Writer, reports []Report) error {
 	gauge("service_active", "1 when the tor systemd unit is active.", flag(func(r Report) bool { return r.Service.Active }))
 	gauge("listener", "1 when something listens on the ORPort, per address family.",
 		fam(func(r Report) bool { return r.Listener.IPv4 }, func(r Report) bool { return r.Listener.IPv6 }))
-	gauge("reachable", "1 when Tor's self-test confirmed the ORPort is reachable from outside in the last 24 hours.",
-		fam(func(r Report) bool { return r.Reachability.IPv4 }, func(r Report) bool { return r.Reachability.IPv6 }))
+	gauge("reachable", "1 when the ORPort is reachable from outside: Tor's self-test confirmed it, or (IPv4) the relay runs in the consensus; tor self-tests only at startup.",
+		fam(func(r Report) bool { v, _ := r.ReachabilityVerdict(); return v == ReachYes }, func(r Report) bool { return r.Reachability.IPv6 }))
 	gauge("reachability_failed", "1 when Tor reported that its ORPort self-test failed.", flag(func(r Report) bool { return r.Reachability.Failed }))
 	gauge("family_ids", "Number of FamilyId lines in torrc.", one(func(r Report) int64 { return int64(len(r.Family.IDs)) }))
 	gauge("family_keys_missing", "Number of configured FamilyIds without an installed secret family key.",

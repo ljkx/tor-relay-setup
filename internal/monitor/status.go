@@ -11,22 +11,36 @@ import (
 	"time"
 
 	"github.com/ljkx/tor-relay-setup/internal/host"
+	"github.com/ljkx/tor-relay-setup/internal/system"
 )
 
 // Units are the services of the monitoring stack, in data-flow order.
 var Units = []string{FleetUnit, "prometheus", "grafana-server", "caddy"}
+
+// UnitsFor are the services of a setup: local mode runs no Caddy.
+func UnitsFor(st State) []string {
+	if st.Local() {
+		return Units[:3:3]
+	}
+	return Units
+}
 
 // StatusOptions locates the local services; tests point them elsewhere.
 type StatusOptions struct {
 	HTTP          *http.Client
 	PrometheusURL string // default http://127.0.0.1:9090
 	GrafanaURL    string // default http://127.0.0.1:3000
+	// Facts and Getenv (default os.Getenv) give the tunnel command in
+	// local mode.
+	Facts  system.Facts
+	Getenv func(string) string
 }
 
 // Status is the health of the monitoring stack.
 type Status struct {
 	State      State
 	Installed  bool
+	Tunnel     Tunnel          // local mode
 	Units      map[string]bool // unit -> active
 	Grafana    bool            // /api/health answers
 	Prometheus bool            // /-/ready answers
@@ -49,8 +63,11 @@ func CollectStatus(ctx context.Context, h host.Host, o StatusOptions) Status {
 	}
 	s := Status{Units: map[string]bool{}, Fleet: map[string]float64{}, Target: "missing"}
 	s.State, _ = ReadState(h)
-	s.Installed = s.State.Domain != ""
-	for _, u := range Units {
+	s.Installed = s.State.Installed()
+	if s.State.Local() {
+		s.Tunnel = DetectTunnel(h, o.Facts, o.Getenv)
+	}
+	for _, u := range UnitsFor(s.State) {
 		_, err := h.Run(ctx, host.Command{Name: "systemctl", Args: []string{"is-active", "--quiet", u}})
 		s.Units[u] = err == nil
 	}
@@ -137,16 +154,23 @@ func (s Status) Write(w io.Writer) {
 		}
 		return "✗"
 	}
-	if !s.Installed {
-		fmt.Fprintln(w, "The monitoring stack is not installed here (sudo tor-relay-setup monitor install --domain NAME).")
-	} else {
+	switch {
+	case !s.Installed:
+		fmt.Fprintln(w, "The monitoring stack is not installed here (sudo tor-relay-setup monitor install --domain NAME, or --local).")
+	case s.State.Local():
+		fmt.Fprintf(w, "Grafana      %s via an SSH tunnel  (local mode; admin %s, password in %s)\n", strings.TrimSuffix(LocalGrafanaURL, "/"), s.State.AdminUser, AdminPasswordPath)
+		for _, row := range s.Tunnel.Rows() {
+			fmt.Fprintf(w, "%-13s%s\n", row[0], row[1])
+		}
+		fmt.Fprintf(w, "Inventory    %s\n", s.State.Inventory)
+	default:
 		fmt.Fprintf(w, "Grafana      https://%s/  (admin %s, password in %s)\n", s.State.Domain, s.State.AdminUser, AdminPasswordPath)
 		if s.State.FleetPath != "" {
 			fmt.Fprintf(w, "Fleet UI     https://%s%s/\n", s.State.Domain, s.State.FleetPath)
 		}
 		fmt.Fprintf(w, "Inventory    %s\n", s.State.Inventory)
 	}
-	for _, u := range Units {
+	for _, u := range UnitsFor(s.State) {
 		fmt.Fprintf(w, "Service      %s %s\n", mark(s.Units[u]), u)
 	}
 	fmt.Fprintf(w, "Grafana      %s %s/api/health\n", mark(s.Grafana), "http://"+GrafanaListen)

@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## v3.3.1 - 2026-10-02
+
+### Added
+
+- **`monitor install --local`** runs the fleet stack on one of your non-exit relays, with no new public service.
+  - Grafana and Prometheus listen on 127.0.0.1 only; there is no Caddy, no domain and no new open port.
+  - You open Grafana through an SSH tunnel; `monitor status` prints the exact `ssh -L` command and the Termius setting.
+  - It refuses to run on an exit relay.
+  - Switching an existing public install to local retires only the Caddy setup and firewall rules this tool created.
+- **Monitoring-only inventories:** `config = "relay.toml"` is now optional in `fleet.toml`. Without it, each `[[host]]` takes just an `address` (and `instance`), which is enough for `fleet`, `fleet serve` and `fleet status` on relays set up some other way. `apply --inventory` asks for a config.
+
+### Fixed
+
+- **Reachability on long-running relays:**
+  - The problem: tor runs its ORPort self-test only at startup, so every relay up for more than a day showed "Reachability ✗". Worse, `relay_reachable` was 0 for those relays, so the fleet rule `TorFleetRelayUnreachable` fired critically for every long-running relay.
+  - The fix: a relay running in the consensus now counts as reachable, and a failed self-test as unreachable. Anything else shows as "?", with the series left out.
+
 ## v3.3.0 - 2026-10-02
 
 A Grafana dashboard for the whole fleet, aggregated, on a management server, with relays that expose nothing new.

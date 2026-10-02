@@ -784,13 +784,9 @@ func printStatus(w io.Writer, r status.Report, several bool) {
 	if k := r.Keys; k != nil && k.Managed() && !k.CertExpires.IsZero() {
 		fmt.Fprintf(w, "Signing key  %s valid until %s (offline master key)\n", mark(k.CertExpires.After(time.Now())), k.CertExpires.Format("2006-01-02 15:04 UTC"))
 	}
-	reach := "no self-test notice in the last 24 h"
-	if r.Reachability.IPv4 {
-		reach = "reachable from outside"
-	} else if r.Reachability.Failed {
-		reach = "NOT reachable from outside"
-	}
-	fmt.Fprintf(w, "Reachability %s %s\n", mark(r.Reachability.IPv4), reach)
+	verdict, reach := r.ReachabilityVerdict()
+	reachMark := map[int]string{status.ReachYes: "✓", status.ReachNo: "✗", status.ReachUnknown: "?"}[verdict]
+	fmt.Fprintf(w, "Reachability %s %s\n", reachMark, reach)
 	if len(r.Family.IDs) > 0 {
 		fmt.Fprintf(w, "Family       %s\n", strings.Join(r.Family.IDs, ", "))
 	}

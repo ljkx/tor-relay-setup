@@ -119,7 +119,7 @@ func TestParseRejects(t *testing.T) {
 		{"invalid template result", "config = \"relay.toml\"\nnickname = \"My-Relay{n}\"\n[[host]]\naddress = \"a\"\n", "relay.nickname"},
 		{"missing address", "config = \"relay.toml\"\n[[host]]\nrelay = { or_port = 1 }\n", "host 1: address is required"},
 		{"bad address", "config = \"relay.toml\"\n[[host]]\naddress = \"-oProxyCommand=sh\"\n", "not an ssh destination"},
-		{"no config", "[[host]]\naddress = \"a\"\n", "config: set the base relay.toml"},
+		{"no config, but a relay setting", "[[host]]\naddress = \"a\"\n[host.relay]\nor_port = 443\n", "needs config"},
 		{"missing config file", "config = \"absent.toml\"\n[[host]]\naddress = \"a\"\n", "base config"},
 		{"no hosts", "config = \"relay.toml\"\n", "no [[host]] entries"},
 		{"parallel too high", "config = \"relay.toml\"\nparallel = 65\n[[host]]\naddress = \"a\"\n", "parallel: must be 1–64"},
@@ -325,5 +325,37 @@ func TestValidAddress(t *testing.T) {
 	}
 	if HostOf("root@[2001:db8::1]") != "2001:db8::1" || HostOf("relay") != "relay" {
 		t.Error("HostOf")
+	}
+}
+
+// An inventory without config lists relays set up some other way, for
+// monitoring only.
+func TestParseMonitorOnly(t *testing.T) {
+	inv, err := Parse([]byte(`
+[[host]]
+address = "205.185.113.112"
+
+[[host]]
+address = "guard0.example.org"
+
+[[host]]
+address = "guard0.example.org"
+instance = "relay2"
+`), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inv.MonitorOnly || len(inv.Entries) != 3 || inv.Entries[2].Instance != "relay2" || inv.Entries[0].Instance != DefaultInstance {
+		t.Fatalf("got %+v", inv)
+	}
+	for _, bad := range []struct{ toml, want string }{
+		{"[[host]]\naddress = \"a\"\nrelay = { nickname = \"X\" }\n", `"relay" needs config`},
+		{"nickname = \"R{n}\"\n[[host]]\naddress = \"a\"\n", "nickname template needs config"},
+		{"[[host]]\naddress = \"a\"\n[[host]]\naddress = \"a\"\n", "are the same relay"},
+		{"[[host]]\naddress = \"a\"\ninstance = 3\n", "instance must be a name"},
+	} {
+		if _, err := Parse([]byte(bad.toml), t.TempDir()); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%q: got %v, want %q", bad.toml, err, bad.want)
+		}
 	}
 }

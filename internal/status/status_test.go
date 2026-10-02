@@ -576,3 +576,24 @@ func TestCollectNamedInstance(t *testing.T) {
 		t.Errorf("default report instance = %q", def.Instance)
 	}
 }
+
+// tor self-tests only at startup: a long-running relay has no recent notice,
+// which must not read as unreachable.
+func TestReachabilityVerdict(t *testing.T) {
+	var r Report
+	if v, text := r.ReachabilityVerdict(); v != ReachUnknown || !strings.Contains(text, "only at startup") {
+		t.Errorf("no evidence: %d %q", v, text)
+	}
+	r.Directory = &onionoo.Relay{Running: true}
+	if v, text := r.ReachabilityVerdict(); v != ReachYes || !strings.Contains(text, "consensus") {
+		t.Errorf("running in the consensus: %d %q", v, text)
+	}
+	r.Reachability.Failed = true
+	if v, _ := r.ReachabilityVerdict(); v != ReachNo {
+		t.Errorf("a failed self-test wins over Tor Metrics: %d", v)
+	}
+	r.Reachability.IPv4 = true
+	if v, _ := r.ReachabilityVerdict(); v != ReachYes {
+		t.Errorf("a passed self-test: %d", v)
+	}
+}

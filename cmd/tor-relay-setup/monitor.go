@@ -29,8 +29,12 @@ Usage:
                                   [--fleet-path /fleet|off] [--admin-user NAME] [--rotate-token]
         install and configure fleet serve, Prometheus, Grafana and Caddy (HTTPS) on this
         server (Debian 12/13, Ubuntu 22.04/24.04/26.04); safe to run again
+  tor-relay-setup monitor install --local [--inventory FILE] [--admin-user NAME] [--rotate-token]
+        the same stack without Caddy and without opening any port, e.g. on one of your
+        non-exit relays (refused on an exit); Grafana is reached through an SSH tunnel
   tor-relay-setup monitor status
-        services, scrape health, Grafana URL and the SSH key relays must authorize
+        services, scrape health, Grafana URL (or the tunnel command) and the SSH key
+        relays must authorize
   tor-relay-setup monitor uninstall [--purge]
         stop the stack; --purge also removes the packages it installed, Grafana's
         database, the metrics history and the monitoring SSH key
@@ -40,6 +44,12 @@ On each relay, let the management server probe it (prints what to add on the ser
 
 Flags:
   --domain NAME      DNS name for Grafana; Caddy gets a Let's Encrypt certificate for it
+  --local            no public service: Grafana stays on 127.0.0.1:3000, reached with
+                     ssh -N -L 3000:127.0.0.1:3000 USER@HOST and http://localhost:3000;
+                     not combined with --domain, --email or --fleet-path. Running install
+                     again without --local or --domain keeps the mode; --domain switches
+                     to public, --local switches a public install to local (Caddy stopped,
+                     its 80/443 rules removed)
   --email ADDR       ACME account e-mail (optional; expiry notices)
   --inventory FILE   fleet.toml that fleet serve probes (default /etc/tor-relay-setup/fleet.toml)
   --fleet-path PATH  publish the fleet web UI at https://NAME/PATH/ (default /fleet; off: loopback only)
@@ -130,6 +140,7 @@ func monitorCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dryRun := fs.Bool("dry-run", false, "")
 	yes := fs.Bool("yes", false, "")
 	domain := fs.String("domain", "", "")
+	localMode := fs.Bool("local", false, "")
 	email := fs.String("email", "", "")
 	inventory := fs.String("inventory", "", "")
 	fleetPath := fs.String("fleet-path", monitor.DefaultFleetPath, "")
@@ -150,7 +161,11 @@ func monitorCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	installOnly := []string{"domain", "email", "inventory", "fleet-path", "admin-user", "rotate-token"}
+	installOnly := []string{"domain", "local", "email", "inventory", "fleet-path", "admin-user", "rotate-token"}
+	fp := *fleetPath
+	if fp == "off" || fp == "none" {
+		fp = ""
+	}
 	switch {
 	case *help || sub == "help":
 		fmt.Fprint(stdout, monitorUsage)
@@ -165,7 +180,16 @@ func monitorCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unexpected argument %q\n", fs.Arg(0))
 		return 2
 	case sub != "install" && slices.ContainsFunc(installOnly, func(n string) bool { return set[n] }):
-		fmt.Fprintln(stderr, "--domain, --email, --inventory, --fleet-path, --admin-user and --rotate-token are only used with monitor install")
+		fmt.Fprintln(stderr, "--domain, --local, --email, --inventory, --fleet-path, --admin-user and --rotate-token are only used with monitor install")
+		return 2
+	case *localMode && set["domain"]:
+		fmt.Fprintln(stderr, "--local and --domain exclude each other: --local keeps Grafana on 127.0.0.1 behind an SSH tunnel, --domain publishes it over HTTPS with Caddy")
+		return 2
+	case *localMode && set["email"]:
+		fmt.Fprintln(stderr, "--email is not used with --local: it is the ACME e-mail for the --domain certificate, and local mode has none")
+		return 2
+	case *localMode && set["fleet-path"] && fp != "":
+		fmt.Fprintln(stderr, "--fleet-path is not used with --local: the fleet web UI stays on 127.0.0.1:9850 and is reached through the SSH tunnel (only --fleet-path off is accepted)")
 		return 2
 	case *purge && sub != "uninstall":
 		fmt.Fprintln(stderr, "--purge is only used with monitor uninstall")
@@ -184,7 +208,12 @@ func monitorCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if sub == "status" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		s := monitor.CollectStatus(ctx, h, monitorStatusO)
+		o := monitorStatusO
+		if st, _ := monitor.ReadState(h); st.Local() {
+			// The tunnel command names this server's address and SSH port.
+			o.Facts, _ = detectFacts(ctx, h)
+		}
+		s := monitor.CollectStatus(ctx, h, o)
 		s.Write(stdout)
 		if !s.Healthy() {
 			return 1
@@ -214,22 +243,31 @@ func monitorCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "error: find the running executable:", err)
 			return 1
 		}
-		fp := *fleetPath
-		if fp == "off" || fp == "none" {
+		// The mode is explicit (--local or --domain) or the recorded one.
+		prev, _ := monitor.ReadState(h)
+		isLocal := monitor.LocalMode(prev, *localMode, set["domain"])
+		if isLocal && !set["fleet-path"] {
 			fp = ""
 		}
+		if isLocal && !*localMode {
+			fmt.Fprintln(stdout, "Keeping local mode from the previous install (monitor install --domain NAME switches to public mode).")
+		}
 		in, err := monitor.NewInstall(monitor.Options{
-			Domain: *domain, Email: *email, Inventory: *inventory, FleetPath: fp, AdminUser: *adminUser,
+			Local: isLocal, Domain: *domain, Email: *email, Inventory: *inventory, FleetPath: fp, AdminUser: *adminUser,
 			Executable: exe, Version: buildVersion(), RotateToken: *rotate,
 		}, facts)
 		if err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 2
 		}
+		in.Previous = prev
 		if monitorHealth != nil {
 			in.Health = monitorHealth
 		}
 		run.Title = "Monitoring server for " + in.Opt.URL()
+		if isLocal {
+			run.Title = "Monitoring stack in local mode (" + strings.TrimSuffix(monitor.LocalGrafanaURL, "/") + " via an SSH tunnel)"
+		}
 		if err := run.Run(ctx, in.Steps(), newPlanEnv(h, facts)); err != nil {
 			return reportRunError(err, stderr)
 		}

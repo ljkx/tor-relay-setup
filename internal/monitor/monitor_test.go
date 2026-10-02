@@ -338,7 +338,18 @@ func (r *recorder) events(e plan.Event) {
 
 func runInstall(t *testing.T, s *fakeServer, f system.Facts, o Options) (*Install, *recorder) {
 	t.Helper()
-	if o.Domain == "" {
+	in, rec, err := tryInstall(t, s, f, o, nil)
+	if err != nil {
+		t.Fatalf("install: %v\nnotes: %q", err, rec.notes)
+	}
+	return in, rec
+}
+
+// tryInstall runs a whole install with environ as the environment
+// (SUDO_USER, SSH_CONNECTION) and the state of an earlier run as Previous.
+func tryInstall(t *testing.T, s *fakeServer, f system.Facts, o Options, environ map[string]string) (*Install, *recorder, error) {
+	t.Helper()
+	if o.Domain == "" && !o.Local {
 		o.Domain = "grafana.example.org"
 	}
 	if o.Executable == "" {
@@ -348,14 +359,14 @@ func runInstall(t *testing.T, s *fakeServer, f system.Facts, o Options) (*Instal
 	if err != nil {
 		t.Fatal(err)
 	}
+	in.Previous, _ = ReadState(s)
+	in.Getenv = func(k string) string { return environ[k] }
 	in.Health = func(context.Context, string) error { return nil }
 	in.LookupHost = func(context.Context, string) ([]string, error) { return []string{"203.0.113.10"}, nil }
 	env := &plan.Env{Host: s, Facts: f, HTTP: keyServer(t), Now: func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) }}
 	var rec recorder
-	if err := plan.Run(context.Background(), in.Steps(), env, rec.events); err != nil {
-		t.Fatalf("install: %v\nnotes: %q", err, rec.notes)
-	}
-	return in, &rec
+	err = plan.Run(context.Background(), in.Steps(), env, rec.events)
+	return in, &rec, err
 }
 
 func TestInstallOnFreshServer(t *testing.T) {

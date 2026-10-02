@@ -31,7 +31,7 @@ tor_relay_setup_service_active{tor_instance="default"} 1
 # TYPE tor_relay_setup_listener gauge
 tor_relay_setup_listener{tor_instance="default",family="ipv4"} 1
 tor_relay_setup_listener{tor_instance="default",family="ipv6"} 0
-# HELP tor_relay_setup_reachable 1 when Tor's self-test confirmed the ORPort is reachable from outside in the last 24 hours.
+# HELP tor_relay_setup_reachable 1 when the ORPort is reachable from outside: Tor's self-test confirmed it, or (IPv4) the relay runs in the consensus; tor self-tests only at startup.
 # TYPE tor_relay_setup_reachable gauge
 tor_relay_setup_reachable{tor_instance="default",family="ipv4"} 1
 tor_relay_setup_reachable{tor_instance="default",family="ipv6"} 0

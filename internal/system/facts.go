@@ -44,6 +44,10 @@ type Facts struct {
 	// IPv6 lists global unicast IPv6 addresses of up, non-loopback
 	// interfaces (link-local, ULA fc00::/7 and loopback excluded).
 	IPv6 []string
+	// IPv4 lists public IPv4 addresses of up, non-loopback interfaces
+	// (private, shared 100.64.0.0/10 and link-local ranges excluded); empty
+	// behind NAT.
+	IPv4 []string
 
 	// SSHPorts is the sorted, de-duplicated union of `sshd -T` ports, the
 	// server port of $SSH_CONNECTION and Port lines in sshd_config (and
@@ -94,7 +98,7 @@ func Detect(ctx context.Context, h host.Host, env func(string) string) (Facts, e
 		}
 		return nil
 	})
-	g.Go(func() error { f.IPv6 = localIPv6(); return nil })
+	g.Go(func() error { f.IPv4, f.IPv6 = localIPs(); return nil })
 	g.Go(func() error { f.SSHPorts = detectSSHPorts(gctx, h, env); return nil })
 	g.Go(func() error { f.Firewall = DetectFirewall(gctx, h); return nil })
 	if err := g.Wait(); err != nil {
@@ -422,12 +426,18 @@ func defaultInterfaceAddrs() ([]net.Addr, error) {
 	return out, nil
 }
 
-func localIPv6() []string {
+// localIPs returns the public IPv4 and global IPv6 interface addresses.
+func localIPs() (v4, v6 []string) {
 	addrs, err := interfaceAddrs()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var out []string
+	add := func(out []string, ip net.IP) []string {
+		if s := ip.String(); !slices.Contains(out, s) {
+			return append(out, s)
+		}
+		return out
+	}
 	for _, a := range addrs {
 		var ip net.IP
 		switch v := a.(type) {
@@ -436,14 +446,25 @@ func localIPv6() []string {
 		case *net.IPAddr:
 			ip = v.IP
 		}
-		if IsGlobalIPv6(ip) {
-			s := ip.String()
-			if !slices.Contains(out, s) {
-				out = append(out, s)
-			}
+		switch {
+		case IsGlobalIPv6(ip):
+			v6 = add(v6, ip)
+		case IsPublicIPv4(ip):
+			v4 = add(v4, ip.To4())
 		}
 	}
-	return out
+	return v4, v6
+}
+
+// sharedIPv4 is the carrier-grade NAT range (RFC 6598).
+var sharedIPv4 = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// IsPublicIPv4 reports whether ip is an IPv4 address reachable from the
+// internet: global unicast, not private (RFC 1918), not shared address
+// space (RFC 6598), not loopback or link-local.
+func IsPublicIPv4(ip net.IP) bool {
+	v4 := ip.To4()
+	return v4 != nil && v4.IsGlobalUnicast() && !v4.IsPrivate() && !sharedIPv4.Contains(v4)
 }
 
 // IsGlobalIPv6 reports whether ip is a global unicast IPv6 address suitable

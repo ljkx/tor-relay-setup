@@ -583,14 +583,22 @@ func (c *console) cards(a *App, width int) string {
 	}
 	relayCard := panel(t, "Relay", kv(t, relayRows), cw, false)
 
-	reach := t.Subtle.Render("no self-test in the last 24 h")
-	switch {
+	// tor self-tests only at startup; a relay running in the consensus is
+	// reachable even without a recent notice (status.ReachabilityVerdict).
+	withDir := r
+	if withDir.Directory == nil {
+		withDir.Directory = c.dir
+	}
+	reach := t.Subtle.Render("not tested since startup")
+	switch verdict, _ := withDir.ReachabilityVerdict(); {
 	case r.Reachability.IPv4 && r.Reachability.IPv6:
 		reach = statusIcon(t, true, false) + " reachable (IPv4 + IPv6)"
 	case r.Reachability.IPv4:
 		reach = statusIcon(t, true, false) + " reachable"
-	case r.Reachability.Failed:
+	case verdict == status.ReachNo:
 		reach = statusIcon(t, false, false) + " not reachable from outside"
+	case verdict == status.ReachYes:
+		reach = statusIcon(t, true, false) + " reachable (in consensus)"
 	}
 	version := r.Tor.Version
 	if version == "" {

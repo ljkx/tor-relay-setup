@@ -66,6 +66,51 @@ func FleetRulesFile() []byte { return monitoring.FleetRules }
 // Grafana's database and must stay the same across runs.
 func GrafanaINIFile(o Options, secretKey string) []byte {
 	host, port, _ := strings.Cut(GrafanaListen, ":")
+	// Public mode: only Caddy talks to Grafana, over loopback, and the
+	// browser sees HTTPS. Local mode: the browser talks to Grafana through
+	// an SSH tunnel as http://localhost:3000, so the Host header is
+	// localhost:3000, the connection is plain HTTP (the tunnel is the
+	// encryption), and Secure cookies or HSTS would break the login.
+	server := `; Only Caddy talks to Grafana; it terminates HTTPS for ` + o.Domain + `.
+protocol = http
+http_addr = ` + host + `
+http_port = ` + port + `
+domain = ` + o.Domain + `
+enforce_domain = true
+root_url = ` + o.URL() + `
+serve_from_sub_path = false
+router_logging = false
+; Caddy compresses responses.
+enable_gzip = false
+`
+	transport := `cookie_secure = true
+cookie_samesite = strict
+allow_embedding = false
+strict_transport_security = true
+`
+	if o.Local {
+		server = `; Local mode: Grafana listens on loopback only and is reached through an SSH
+; tunnel (ssh -N -L 3000:127.0.0.1:3000 ...) as http://localhost:3000. The
+; tunnel encrypts; nothing else can connect.
+protocol = http
+http_addr = ` + host + `
+http_port = ` + port + `
+domain = localhost
+enforce_domain = false
+root_url = ` + o.URL() + `
+serve_from_sub_path = false
+router_logging = false
+; No compression (ssh -C compresses the tunnel if wanted).
+enable_gzip = false
+`
+		transport = `; Plain HTTP inside the SSH tunnel: Secure cookies and HSTS would stop the
+; browser from keeping the login at http://localhost:3000.
+cookie_secure = false
+cookie_samesite = strict
+allow_embedding = false
+strict_transport_security = false
+`
+	}
 	return []byte("; " + header + `
 ; The administrator password is not stored here: it is in
 ; ` + AdminPasswordPath + ` (root only) and set with grafana cli.
@@ -77,18 +122,7 @@ plugins = /var/lib/grafana/plugins
 provisioning = /etc/grafana/provisioning
 
 [server]
-; Only Caddy talks to Grafana; it terminates HTTPS for ` + o.Domain + `.
-protocol = http
-http_addr = ` + host + `
-http_port = ` + port + `
-domain = ` + o.Domain + `
-enforce_domain = true
-root_url = ` + o.URL() + `
-serve_from_sub_path = false
-router_logging = false
-; Caddy compresses responses.
-enable_gzip = false
-
+` + server + `
 [analytics]
 ; No usage reports, update checks or feedback links: nothing leaves this
 ; server unless an operator opens a link.
@@ -101,11 +135,7 @@ feedback_links_enabled = false
 admin_user = ` + o.AdminUser + `
 secret_key = ` + secretKey + `
 disable_gravatar = true
-cookie_secure = true
-cookie_samesite = strict
-allow_embedding = false
-strict_transport_security = true
-strict_transport_security_max_age_seconds = 31536000
+` + transport + `strict_transport_security_max_age_seconds = 31536000
 strict_transport_security_preload = false
 strict_transport_security_subdomains = false
 x_content_type_options = true
@@ -365,15 +395,22 @@ Host *
 func serveManaged(o Options, tokenSHA256 string) map[string]string {
 	// Caddy passes the prefix on; fleet serve accepts it either way.
 	base := o.FleetPath + "/"
+	// Caddy on loopback: its X-Forwarded-For/-Proto are believed (login
+	// rate limits per client, Secure cookies).
+	proxies := `["127.0.0.1", "::1"]`
+	if o.Local {
+		// No proxy in local mode: requests come straight through the SSH
+		// tunnel, so no forwarded header is believed. An empty base_path is
+		// the root.
+		base, proxies = "", "[]"
+	}
 	return map[string]string{
 		"listen":               quote(ServeListen),
 		"base_path":            quote(base),
 		"inventory":            quote(o.Inventory),
 		"metrics_auth":         "true",
 		"metrics_token_sha256": quote(tokenSHA256),
-		// Caddy on loopback: its X-Forwarded-For/-Proto are believed (login
-		// rate limits per client, Secure cookies).
-		"trusted_proxies": `["127.0.0.1", "::1"]`,
+		"trusted_proxies":      proxies,
 	}
 }
 

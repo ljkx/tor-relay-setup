@@ -41,7 +41,13 @@ type Inventory struct {
 	// SharedNickname is set for one-off --host lists, which give every
 	// relay the base config's nickname (as before inventories existed).
 	SharedNickname bool
+	// MonitorOnly is set for an inventory without config: it lists relays
+	// for fleet, fleet serve and fleet status, but cannot be applied.
+	MonitorOnly bool
 }
+
+// ErrMonitorOnly is returned when a monitoring-only inventory is applied.
+var ErrMonitorOnly = errors.New(`this inventory has no config = "relay.toml", so it only lists relays for monitoring (fleet, fleet serve); add a base config to apply it`)
 
 // Entry is one relay of the fleet.
 type Entry struct {
@@ -123,14 +129,14 @@ func Parse(data []byte, dir string) (Inventory, error) {
 	if len(unknown) > 0 {
 		return Inventory{}, fmt.Errorf("unknown inventory keys: %s (relay settings go in relay.toml or a [host.TABLE] override)", strings.Join(unknown, ", "))
 	}
-	if raw.Config == "" {
-		return Inventory{}, errors.New(`config: set the base relay.toml, e.g. config = "relay.toml"`)
-	}
 	if raw.Parallel < 0 || raw.Parallel > maxParallel {
 		return Inventory{}, fmt.Errorf("parallel: must be 1–%d", maxParallel)
 	}
 	if len(raw.Hosts) == 0 {
 		return Inventory{}, errors.New("no [[host]] entries")
+	}
+	if raw.Config == "" {
+		return monitorOnly(raw)
 	}
 	cfgPath := raw.Config
 	if !filepath.IsAbs(cfgPath) {
@@ -147,6 +153,45 @@ func Parse(data []byte, dir string) (Inventory, error) {
 			return Inventory{}, err
 		}
 		inv.Entries = append(inv.Entries, e)
+	}
+	if err := inv.validate(); err != nil {
+		return Inventory{}, err
+	}
+	return inv, nil
+}
+
+// monitorOnly builds an inventory without a base config, for relays that
+// were set up some other way and are only to be monitored: each [[host]]
+// takes an address and, for a second relay on a server, an instance.
+func monitorOnly(raw rawInventory) (Inventory, error) {
+	if raw.Nickname != "" {
+		return Inventory{}, errors.New(`nickname: a nickname template needs config = "relay.toml" (a monitoring-only inventory reads the relays' own nicknames)`)
+	}
+	inv := Inventory{Parallel: max(raw.Parallel, 1), MonitorOnly: true}
+	for i, h := range raw.Hosts {
+		where := fmt.Sprintf("host %d", i+1)
+		address, ok := h["address"].(string)
+		if !ok || address == "" {
+			return Inventory{}, fmt.Errorf("%s: address is required, e.g. address = \"relay1.example.org\"", where)
+		}
+		if err := ValidAddress(address); err != nil {
+			return Inventory{}, fmt.Errorf("%s: %w", where, err)
+		}
+		instance := DefaultInstance
+		for k, v := range h {
+			switch k {
+			case "address":
+			case "instance":
+				s, ok := v.(string)
+				if !ok || s == "" {
+					return Inventory{}, fmt.Errorf("%s (%s): instance must be a name", where, address)
+				}
+				instance = s
+			default:
+				return Inventory{}, fmt.Errorf("%s (%s): %q needs config = \"relay.toml\"; without it, a [[host]] only takes address and instance", where, address, k)
+			}
+		}
+		inv.Entries = append(inv.Entries, Entry{Index: i + 1, Address: address, Instance: instance})
 	}
 	if err := inv.validate(); err != nil {
 		return Inventory{}, err
@@ -327,7 +372,7 @@ func (inv Inventory) validate() error {
 	ports := map[string]Entry{}
 	name := func(e Entry) string { return fmt.Sprintf("host %d (%s)", e.Index, e.Address) }
 	for _, e := range inv.Entries {
-		if !inv.SharedNickname {
+		if !inv.SharedNickname && !inv.MonitorOnly {
 			key := strings.ToLower(e.Nickname())
 			if prev, ok := nick[key]; ok {
 				errs = append(errs, fmt.Errorf("nickname %q is used by %s and %s; give each relay its own, e.g. nickname = \"%s{n}\"", e.Nickname(), name(prev), name(e), e.Nickname()))
@@ -340,7 +385,7 @@ func (inv Inventory) validate() error {
 		}
 		relays[server+" "+e.Instance] = e
 		port := fmt.Sprintf("%s %d", server, e.Setup.Relay.ORPort)
-		if prev, ok := ports[port]; ok && prev.Instance != e.Instance {
+		if prev, ok := ports[port]; ok && prev.Instance != e.Instance && !inv.MonitorOnly {
 			errs = append(errs, fmt.Errorf("%s and %s both use ORPort %d on the same server", name(prev), name(e), e.Setup.Relay.ORPort))
 		}
 		ports[port] = e
