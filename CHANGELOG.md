@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## v3.3.4 - 2026-10-02
+
+### Fixed
+
+- **False "family key missing" on hand-built relays:**
+  - The problem: the FamilyId of an installed key was read only from `NAME.public_family_id`. tor needs just `NAME.secret_family_key`, and the Tor Project's guide has operators copy only that file. So relays that followed it reported their key as missing, raising a warning and the `TorFleetFamilyKeyMissing` alert.
+  - The fix: without a valid public file, the FamilyId is now derived from the secret key itself.
+  - Tested: a unit test checks the derivation against Go's ed25519. On a real relay in CI, a key without its public file now counts.
+- **`self-update` restarts `fleet serve`:** a running `tor-relay-setup-fleet` kept executing the old, deleted binary until restarted by hand. Metrics added in a release (such as `relay_master_key_offline` in v3.3.3) did not appear until then.
+
 ## v3.3.3 - 2026-10-02
 
 ### Fixed

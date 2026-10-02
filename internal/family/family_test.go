@@ -3,6 +3,9 @@ package family
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha512"
+	"encoding/base64"
 	"errors"
 	"io/fs"
 	"os"
@@ -97,12 +100,33 @@ func TestKeyDirectory(t *testing.T) {
 	}
 }
 
+// TestIDFromSecret checks the FamilyId derivation against crypto/ed25519:
+// tor stores the expanded secret key (SHA-512 of the seed, clamped) after
+// a 32-byte header, and the FamilyId is the public key in unpadded base64.
+func TestIDFromSecret(t *testing.T) {
+	seed := bytes.Repeat([]byte{7}, ed25519.SeedSize)
+	h := sha512.Sum512(seed)
+	h[0] &= 248
+	h[31] &= 127
+	h[31] |= 64
+	key := make([]byte, keySize)
+	copy(key, KeyHeader)
+	copy(key[32:], h[:])
+	want := base64.RawStdEncoding.EncodeToString(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
+	if got := IDFromSecret(key); got != want || !ValidID(got) {
+		t.Errorf("IDFromSecret = %q, want %q", got, want)
+	}
+	if IDFromSecret([]byte("short")) != "" {
+		t.Error("an invalid key got an ID")
+	}
+}
+
 func TestInstalledAndHasKeyFor(t *testing.T) {
 	const dir = "/var/lib/tor/keys"
 	f := host.NewFake()
 	f.Files[dir+"/alpha.secret_family_key"] = makeKey(1)
 	f.Files[dir+"/alpha.public_family_id"] = []byte("  " + testID + "\n")
-	f.Files[dir+"/beta.secret_family_key"] = makeKey(2)            // no public id
+	f.Files[dir+"/beta.secret_family_key"] = makeKey(2)            // no public id, as tor needs none
 	f.Files[dir+"/gamma.secret_family_key"] = makeKey(3)           // bad public id
 	f.Files[dir+"/gamma.public_family_id"] = []byte("not-an-id\n") //
 	f.Files[dir+"/broken.secret_family_key"] = []byte("short")     // invalid key
@@ -113,10 +137,11 @@ func TestInstalledAndHasKeyFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	betaID := IDFromSecret(makeKey(2))
 	want := []Key{
 		{Name: "alpha", Path: dir + "/alpha.secret_family_key", ID: testID},
-		{Name: "beta", Path: dir + "/beta.secret_family_key"},
-		{Name: "gamma", Path: dir + "/gamma.secret_family_key"},
+		{Name: "beta", Path: dir + "/beta.secret_family_key", ID: betaID},
+		{Name: "gamma", Path: dir + "/gamma.secret_family_key", ID: IDFromSecret(makeKey(3))},
 	}
 	if !reflect.DeepEqual(keys, want) {
 		t.Fatalf("Installed =\n%+v\nwant\n%+v", keys, want)
@@ -128,6 +153,7 @@ func TestInstalledAndHasKeyFor(t *testing.T) {
 		want bool
 	}{
 		{keys, testID, true},
+		{keys, betaID, true},
 		{keys, testID2, false},
 		{keys, "*", true},
 		{keys, "", false},

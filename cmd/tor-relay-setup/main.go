@@ -26,6 +26,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/fleet"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/metrics"
+	"github.com/ljkx/tor-relay-setup/internal/monitor"
 	"github.com/ljkx/tor-relay-setup/internal/onionoo"
 	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/remote"
@@ -720,6 +721,9 @@ func selfUpdate(check, dryRun bool, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "error:", err)
 			return 1
 		}
+		if u.Replaced {
+			restartServing(ctx, u.Run, stdout)
+		}
 		return 0
 	}
 	res, err := u.Check(ctx)
@@ -742,6 +746,23 @@ func selfUpdate(check, dryRun bool, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "The latest release may be newer: sudo tor-relay-setup self-update")
 	}
 	return exitUpdateAvailable
+}
+
+// restartServing restarts fleet serve when it runs, so the service uses the
+// binary self-update just installed instead of the deleted old one.
+func restartServing(ctx context.Context, run func(context.Context, host.Command) (host.Result, error), out io.Writer) {
+	unit := monitor.FleetUnit + ".service"
+	if run == nil {
+		return
+	}
+	if _, err := run(ctx, host.Command{Name: "systemctl", Args: []string{"is-active", "--quiet", unit}}); err != nil {
+		return
+	}
+	if _, err := run(ctx, host.Command{Name: "systemctl", Args: []string{"restart", unit}}); err != nil {
+		fmt.Fprintf(out, "Could not restart %s (%v); run: sudo systemctl restart %s\n", unit, err, unit)
+		return
+	}
+	fmt.Fprintf(out, "Restarted %s, so it runs the new version.\n", unit)
 }
 
 // printStatus prints one report. The Instance line appears when several
