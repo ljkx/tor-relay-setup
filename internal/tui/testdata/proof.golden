@@ -1,0 +1,50 @@
+ ◆ tor-relay-setup vtest                                                                             old-host
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ContactInfo proof · files for your website (HTTPS, text/plain, no redirect to another domain)
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Relays GoodRelay · example.org                                                                           │
+│ ed25519-family-id.txt  (CIISS v3, proof:uri-familyid-ed25519)                                            │
+│ Publish at https://example.org/.well-known/tor-relay/ed25519-family-id.txt                               │
+│ ✓ published and lists every entry                                                                        │
+│   # Tor relay family ID(s) of this operator (CIISS proof:uri-familyid-ed25519).                          │
+│   AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA                                                            │
+│                                                                                                          │
+│ rsa-fingerprint.txt  (legacy CIISS v2, proof:uri-rsa)                                                    │
+│ Publish at https://example.org/.well-known/tor-relay/rsa-fingerprint.txt                                 │
+│   # Tor relay RSA fingerprints of this operator (legacy CIISS v2 proof:uri-rsa).                         │
+│   ABCDEF0123456789ABCDEF0123456789ABCDEF01                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ c check the published files  ·  esc back

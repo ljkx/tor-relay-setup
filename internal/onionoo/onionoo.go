@@ -1,6 +1,7 @@
 // Package onionoo is a small client for Tor Metrics' Onionoo API: relay
 // details for the local fingerprint, nickname search for family candidates,
-// published status of a set of fingerprints, and traffic history.
+// published status of a set of fingerprints, and traffic history, plus
+// bulk details and history lookups for the fleet dashboard.
 package onionoo
 
 import (
@@ -50,12 +51,30 @@ type Relay struct {
 	FirstSeen, LastSeen   string
 
 	AdvertisedBandwidth, ObservedBandwidth, ConsensusWeight int64
+	// ConsensusWeightFraction is the relay's share of the network's total
+	// consensus weight (0–1).
+	ConsensusWeightFraction float64
 
 	Platform, Contact string
 	ORAddresses       []string
 	FamilyIDs         []string // Onionoo "family_ids" (Tor 0.4.9 FamilyId), when published
 
 	ExitProbability, GuardProbability, MiddleProbability float64
+
+	// OverloadGeneral is Onionoo's "overload_general_timestamp": the hour
+	// of the last overload-general event in the relay's descriptor. Relay
+	// Search shows the relay as overloaded while it is under 72 hours old.
+	OverloadGeneral time.Time `json:"OverloadGeneral,omitzero"`
+}
+
+// OverloadWindow is how long tor keeps publishing overload-general after
+// the last event (dir-spec).
+const OverloadWindow = 72 * time.Hour
+
+// Overloaded reports whether Relay Search shows the relay as overloaded at
+// now.
+func (r *Relay) Overloaded(now time.Time) bool {
+	return r != nil && !r.OverloadGeneral.IsZero() && now.Sub(r.OverloadGeneral) < OverloadWindow
 }
 
 // Summary is one relay of an Onionoo summary document.
@@ -135,6 +154,7 @@ type detailsRelay struct {
 	AdvertisedBandwidth int64           `json:"advertised_bandwidth"`
 	ObservedBandwidth   int64           `json:"observed_bandwidth"`
 	ConsensusWeight     int64           `json:"consensus_weight"`
+	WeightFraction      float64         `json:"consensus_weight_fraction"`
 	Platform            string          `json:"platform"`
 	Contact             string          `json:"contact"`
 	ORAddresses         []string        `json:"or_addresses"`
@@ -142,6 +162,7 @@ type detailsRelay struct {
 	ExitProbability     float64         `json:"exit_probability"`
 	GuardProbability    float64         `json:"guard_probability"`
 	MiddleProbability   float64         `json:"middle_probability"`
+	OverloadGeneralMS   int64           `json:"overload_general_timestamp"` // milliseconds since the epoch
 }
 
 // familyIDs accepts family_ids as a list of strings or a single string and
@@ -178,25 +199,107 @@ func (c Client) Details(ctx context.Context, fingerprint string) (*Relay, error)
 	if len(doc.Relays) == 0 {
 		return nil, nil
 	}
-	d := doc.Relays[0]
+	return doc.Relays[0].relay(), nil
+}
+
+func (d detailsRelay) relay() *Relay {
+	var overload time.Time
+	if d.OverloadGeneralMS > 0 {
+		overload = time.UnixMilli(d.OverloadGeneralMS).UTC()
+	}
 	return &Relay{
-		Nickname:            d.Nickname,
-		Fingerprint:         d.Fingerprint,
-		Running:             d.Running,
-		Flags:               d.Flags,
-		FirstSeen:           d.FirstSeen,
-		LastSeen:            d.LastSeen,
-		AdvertisedBandwidth: d.AdvertisedBandwidth,
-		ObservedBandwidth:   d.ObservedBandwidth,
-		ConsensusWeight:     d.ConsensusWeight,
-		Platform:            d.Platform,
-		Contact:             d.Contact,
-		ORAddresses:         d.ORAddresses,
-		FamilyIDs:           familyIDs(d.FamilyIDs),
-		ExitProbability:     d.ExitProbability,
-		GuardProbability:    d.GuardProbability,
-		MiddleProbability:   d.MiddleProbability,
-	}, nil
+		OverloadGeneral:         overload,
+		Nickname:                d.Nickname,
+		Fingerprint:             d.Fingerprint,
+		Running:                 d.Running,
+		Flags:                   d.Flags,
+		FirstSeen:               d.FirstSeen,
+		LastSeen:                d.LastSeen,
+		AdvertisedBandwidth:     d.AdvertisedBandwidth,
+		ObservedBandwidth:       d.ObservedBandwidth,
+		ConsensusWeight:         d.ConsensusWeight,
+		ConsensusWeightFraction: d.WeightFraction,
+		Platform:                d.Platform,
+		Contact:                 d.Contact,
+		ORAddresses:             d.ORAddresses,
+		FamilyIDs:               familyIDs(d.FamilyIDs),
+		ExitProbability:         d.ExitProbability,
+		GuardProbability:        d.GuardProbability,
+		MiddleProbability:       d.MiddleProbability,
+	}
+}
+
+// BulkChunk is how many fingerprints one bulk request looks up, which
+// keeps request URLs short (40 × 41 characters).
+const BulkChunk = 40
+
+// chunks normalizes and de-duplicates fingerprints and splits them into
+// request-sized groups.
+func chunks(fingerprints []string) ([][]string, error) {
+	var fps []string
+	for _, f := range fingerprints {
+		n, err := NormalizeFingerprint(f)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(fps, n) {
+			fps = append(fps, n)
+		}
+	}
+	var out [][]string
+	for len(fps) > 0 {
+		n := min(BulkChunk, len(fps))
+		out = append(out, fps[:n])
+		fps = fps[n:]
+	}
+	return out, nil
+}
+
+// DetailsBulk looks up many relays at once, BulkChunk fingerprints per
+// request, and returns the published ones by fingerprint; relays Onionoo
+// does not list are absent. The first failing request ends the lookup.
+func (c Client) DetailsBulk(ctx context.Context, fingerprints []string) (map[string]*Relay, error) {
+	groups, err := chunks(fingerprints)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*Relay{}
+	for _, g := range groups {
+		var doc struct {
+			Relays []detailsRelay `json:"relays"`
+		}
+		if err := c.get(ctx, "/details", url.Values{"lookup": {strings.Join(g, ",")}}, &doc); err != nil {
+			return nil, err
+		}
+		for _, d := range doc.Relays {
+			if fp, err := NormalizeFingerprint(d.Fingerprint); err == nil {
+				out[fp] = d.relay()
+			}
+		}
+	}
+	return out, nil
+}
+
+// BandwidthBulk returns the traffic history of many relays by fingerprint,
+// BulkChunk per request; relays Onionoo does not list are absent.
+func (c Client) BandwidthBulk(ctx context.Context, fingerprints []string) (map[string]*Bandwidth, error) {
+	groups, err := chunks(fingerprints)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*Bandwidth{}
+	for _, g := range groups {
+		var doc bandwidthDoc
+		if err := c.get(ctx, "/bandwidth", url.Values{"lookup": {strings.Join(g, ",")}}, &doc); err != nil {
+			return nil, err
+		}
+		for _, r := range doc.Relays {
+			if fp, err := NormalizeFingerprint(r.Fingerprint); err == nil {
+				out[fp] = &Bandwidth{Read: pickGraph(r.Read), Written: pickGraph(r.Write)}
+			}
+		}
+	}
+	return out, nil
 }
 
 // summaryDoc is an Onionoo summary document (short keys).
@@ -329,6 +432,15 @@ func pickGraph(graphs map[string]graph) History {
 	return History{}
 }
 
+// bandwidthDoc is an Onionoo bandwidth document.
+type bandwidthDoc struct {
+	Relays []struct {
+		Fingerprint string           `json:"fingerprint"`
+		Read        map[string]graph `json:"read_history"`
+		Write       map[string]graph `json:"write_history"`
+	} `json:"relays"`
+}
+
 // Bandwidth returns the published traffic history of the relay with this
 // fingerprint, or (nil, nil) when Onionoo does not list it yet.
 func (c Client) Bandwidth(ctx context.Context, fingerprint string) (*Bandwidth, error) {
@@ -336,12 +448,7 @@ func (c Client) Bandwidth(ctx context.Context, fingerprint string) (*Bandwidth, 
 	if err != nil {
 		return nil, err
 	}
-	var doc struct {
-		Relays []struct {
-			Read  map[string]graph `json:"read_history"`
-			Write map[string]graph `json:"write_history"`
-		} `json:"relays"`
-	}
+	var doc bandwidthDoc
 	if err := c.get(ctx, "/bandwidth", url.Values{"lookup": {fp}}, &doc); err != nil {
 		return nil, err
 	}

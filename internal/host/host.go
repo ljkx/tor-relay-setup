@@ -33,6 +33,9 @@ type Command struct {
 	// StatusFD, when set, receives the lines a program writes to file
 	// descriptor 3 (apt's machine-readable APT::Status-Fd progress).
 	StatusFD func(line string)
+	// Stdin, when not nil, is the program's standard input; otherwise it
+	// reads from the null device. It is never logged or shown in dry runs.
+	Stdin []byte
 }
 
 // String renders the command as a shell-quoted line for logs and dry runs.
@@ -169,6 +172,9 @@ func (l *Local) Stream(ctx context.Context, c Command, onLine func(string)) (Res
 	cmd.Dir = c.Dir
 	cmd.Env = append(os.Environ(), c.Env...)
 	cmd.WaitDelay = 5 * time.Second
+	if c.Stdin != nil {
+		cmd.Stdin = bytes.NewReader(c.Stdin)
+	}
 
 	var out bytes.Buffer
 	pr, pw := io.Pipe()

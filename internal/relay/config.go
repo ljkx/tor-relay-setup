@@ -20,8 +20,9 @@ type Mode string
 
 // Relay roles.
 const (
-	ModeGuard Mode = "guard" // guard / middle relay, never exits traffic
-	ModeExit  Mode = "exit"  // exit relay
+	ModeGuard  Mode = "guard"  // guard / middle relay, never exits traffic
+	ModeExit   Mode = "exit"   // exit relay
+	ModeBridge Mode = "bridge" // unlisted bridge with a pluggable transport
 )
 
 // ExitPolicy selects the exit policy written for exit relays.
@@ -29,9 +30,20 @@ type ExitPolicy string
 
 // Exit policies.
 const (
-	PolicyReduced ExitPolicy = "reduced" // ReducedExitPolicy 1
+	PolicyReduced ExitPolicy = "reduced" // ReducedExitPolicy 1 (tor's built-in list)
 	PolicyDefault ExitPolicy = "default" // Tor's built-in default exit policy
+	PolicyWeb     ExitPolicy = "web"     // ports 80 and 443 only
+	PolicyCustom  ExitPolicy = "custom"  // operator-written ExitPolicy lines
 )
+
+// ValidExitPolicy reports whether p is a known policy choice.
+func ValidExitPolicy(p ExitPolicy) bool {
+	switch p {
+	case PolicyReduced, PolicyDefault, PolicyWeb, PolicyCustom:
+		return true
+	}
+	return false
+}
 
 // BandwidthMode selects how relay bandwidth is limited.
 type BandwidthMode string
@@ -164,6 +176,35 @@ type Config struct {
 	Sandbox       bool
 	MetricsPort   string // "" = disabled, else e.g. "127.0.0.1:9035"
 	Bandwidth     Bandwidth
+
+	// ExitPolicyLines are the ExitPolicy entries of PolicyCustom, in tor's
+	// form ("accept *:443"); PolicyWeb uses WebExitPolicy.
+	ExitPolicyLines []string
+	// ExitNotice is the HTML page tor serves as "/" on DirPort 80
+	// (DirPortFrontPage); "" serves none. Exit mode only.
+	ExitNotice string
+	// Bridge holds the transport settings; bridge mode only.
+	Bridge Bridge
+	// OfflineMasterKey keeps tor from ever loading or generating the ed25519
+	// master identity key: signing keys are renewed with tor --keygen.
+	OfflineMasterKey bool
+}
+
+// ExitNoticePort is where the exit notice is served: Tor's exit guide asks
+// for an informative page on port 80 of the exit address, and tor can serve
+// it itself with DirPort 80 and DirPortFrontPage. Since 0.4.6 relays no
+// longer publish their DirPort, so this only answers web visitors.
+const ExitNoticePort = 80
+
+// PolicyEntries returns the ExitPolicy lines c renders, if any.
+func (c Config) PolicyEntries() []string {
+	switch c.ExitPolicy {
+	case PolicyWeb:
+		return WebExitPolicy
+	case PolicyCustom:
+		return c.ExitPolicyLines
+	}
+	return nil
 }
 
 // Validate checks every field and reports all problems at once, each
@@ -187,11 +228,30 @@ func (c Config) Validate() error {
 	switch c.Mode {
 	case ModeGuard:
 	case ModeExit:
-		if c.ExitPolicy != PolicyReduced && c.ExitPolicy != PolicyDefault {
-			add("invalid ExitPolicy %q: want reduced or default", c.ExitPolicy)
+		if !ValidExitPolicy(c.ExitPolicy) {
+			add("invalid ExitPolicy %q: want reduced, default, web or custom", c.ExitPolicy)
+		}
+		if c.ExitPolicy == PolicyCustom {
+			if _, err := NormalizePolicy(c.ExitPolicyLines); err != nil {
+				add("invalid ExitPolicyLines: %v", err)
+			}
+		}
+		if c.ExitNotice != "" && (!strings.HasPrefix(c.ExitNotice, "/") || strings.ContainsAny(c.ExitNotice, " \t\"")) {
+			add("invalid ExitNotice %q: need an absolute path without spaces", c.ExitNotice)
+		}
+		if c.ExitNotice != "" && c.ORPort == ExitNoticePort {
+			add("invalid ExitNotice: the notice needs port %d, which is the ORPort", ExitNoticePort)
+		}
+	case ModeBridge:
+		errs = append(errs, c.Bridge.validate(c.ORPort)...)
+		if c.Sandbox {
+			add("invalid Sandbox: tor refuses managed pluggable transports with Sandbox 1")
+		}
+		if len(c.FamilyIDs) > 0 || c.FamilyPending {
+			add("invalid FamilyIDs: a family would link the bridge to your public relays (tor(1): no family for bridges)")
 		}
 	default:
-		add("invalid Mode %q: want guard or exit", c.Mode)
+		add("invalid Mode %q: want guard, exit or bridge", c.Mode)
 	}
 	for _, id := range c.FamilyIDs {
 		if !ValidFamilyID(id) {
@@ -217,7 +277,29 @@ const (
 	bandwidthComment     = "# Managed bandwidth and traffic settings."
 	rateComment          = "# Relay-specific bandwidth limits. Tor applies these per second."
 	accountingComment    = "# Monthly accounting safety cap. Tor hibernates if this is exhausted."
+	offlineKeyComment    = "# Managed offline master key: the ed25519 identity key is kept off this server. Renew the signing key with tor --keygen before it expires."
+	exitNoticeComment    = "# Managed exit notice: tor serves this page to web visitors on port 80 (the DirPort is not published)."
 )
+
+// policyLines returns the exit policy directives of an exit relay.
+func policyLines(p ExitPolicy, entries []string, ipv6Exit bool) []string {
+	var lines []string
+	if p == PolicyReduced {
+		lines = append(lines, "ReducedExitPolicy 1")
+	}
+	for _, e := range entries {
+		lines = append(lines, "ExitPolicy "+e)
+	}
+	if ipv6Exit {
+		lines = append(lines, "IPv6Exit 1")
+	}
+	return lines
+}
+
+// exitNoticeLines serves page as the exit notice on port 80.
+func exitNoticeLines(page string) []string {
+	return []string{fmt.Sprintf("DirPort %d", ExitNoticePort), "DirPortFrontPage " + page}
+}
 
 // Render returns a complete torrc for c, laid out like the Bash installer's
 // build_torrc. generatedBy and now (printed in UTC) go into the header.
@@ -232,40 +314,55 @@ func (c Config) Render(generatedBy string, now time.Time) []byte {
 	p("\n")
 	p("Nickname %s\n", c.Nickname)
 	p("ContactInfo %s\n", Quote(c.ContactInfo))
-	if len(c.FamilyIDs) > 0 {
-		p("\n%s\n", familyComment)
-		for _, id := range c.FamilyIDs {
-			p("FamilyId %s\n", id)
+	if c.Mode != ModeBridge {
+		if len(c.FamilyIDs) > 0 {
+			p("\n%s\n", familyComment)
+			for _, id := range c.FamilyIDs {
+				p("FamilyId %s\n", id)
+			}
+		} else if c.FamilyPending {
+			p("\n%s\n", familyPendingComment)
 		}
-	} else if c.FamilyPending {
-		p("\n%s\n", familyPendingComment)
+	}
+	if c.OfflineMasterKey {
+		p("\n%s\nOfflineMasterKey 1\n", offlineKeyComment)
 	}
 
-	p("\nORPort %d\n", c.ORPort)
-	if c.IPv6Address != "" {
-		p("ORPort [%s]:%d\n", strings.Trim(c.IPv6Address, "[]"), c.ORPort)
+	if c.Mode == ModeBridge {
+		p("\n")
+		for _, line := range c.bridgeLines() {
+			p("%s\n", line)
+		}
+	} else {
+		p("\nORPort %d\n", c.ORPort)
+		if c.IPv6Address != "" {
+			p("ORPort [%s]:%d\n", strings.Trim(c.IPv6Address, "[]"), c.ORPort)
+		}
 	}
 
 	p("\n# Disable local SOCKS listener on this relay-only server.\n")
 	p("SocksPort 0\n")
-	p("\n")
-	if c.Mode == ModeExit {
-		p("# Exit relay mode.\n")
+	switch c.Mode {
+	case ModeExit:
+		p("\n# Exit relay mode.\n")
 		p("ExitRelay 1\n")
-		if c.ExitPolicy == PolicyReduced {
-			p("ReducedExitPolicy 1\n")
+		for _, line := range policyLines(c.ExitPolicy, c.PolicyEntries(), c.IPv6Exit) {
+			p("%s\n", line)
 		}
-		if c.IPv6Exit {
-			p("IPv6Exit 1\n")
+		if c.ExitNotice != "" {
+			p("\n%s\n", exitNoticeComment)
+			for _, line := range exitNoticeLines(c.ExitNotice) {
+				p("%s\n", line)
+			}
 		}
-	} else {
-		p("# Guard / middle relay mode.\n")
+	case ModeGuard:
+		p("\n# Guard / middle relay mode.\n")
 		p("ExitRelay 0\n")
 	}
 
 	p("\n# Keep potentially sensitive log details scrubbed.\n")
 	p("SafeLogging 1\n")
-	if c.Sandbox {
+	if c.Sandbox && c.Mode != ModeBridge {
 		p("Sandbox 1\n")
 	}
 

@@ -264,7 +264,7 @@ func TestValidate(t *testing.T) {
 		{name: "contact hash", mutate: func(c *Config) { c.ContactInfo = "a#b" }, wantErr: []string{"ContactInfo"}},
 		{name: "port zero", mutate: func(c *Config) { c.ORPort = 0 }, wantErr: []string{"ORPort"}},
 		{name: "bad ipv6", mutate: func(c *Config) { c.IPv6Address = "[2001:db8::1]" }, wantErr: []string{"IPv6Address"}},
-		{name: "bad mode", mutate: func(c *Config) { c.Mode = "bridge" }, wantErr: []string{"Mode"}},
+		{name: "bad mode", mutate: func(c *Config) { c.Mode = "middle" }, wantErr: []string{"Mode"}},
 		{name: "exit needs policy", mutate: func(c *Config) { c.Mode = ModeExit }, wantErr: []string{"ExitPolicy"}},
 		{name: "bad family id", mutate: func(c *Config) { c.FamilyIDs = []string{"short"} }, wantErr: []string{"FamilyIDs"}},
 		{name: "public metrics", mutate: func(c *Config) { c.MetricsPort = "0.0.0.0:9035" }, wantErr: []string{"MetricsPort"}},

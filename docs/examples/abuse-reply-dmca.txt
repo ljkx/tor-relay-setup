@@ -1,0 +1,58 @@
+Subject: Re: [ORIGINAL SUBJECT] - copyright notice for [IP ADDRESS]
+
+# Reply to a copyright (DMCA-style) notice forwarded by your hosting provider.
+#
+# Written for tor-relay-setup in our own words. The points follow the EFF's
+# "Response template for Tor relay operator to ISP" and the EFF Legal FAQ for
+# Tor Relay Operators, published by the Tor Project:
+#   https://community.torproject.org/relay/community-resources/eff-tor-legal-faq/tor-dmca-response/
+#   https://community.torproject.org/relay/community-resources/eff-tor-legal-faq/
+# This is not legal advice. Change everything that does not apply to you,
+# make sure every sentence is true, and talk to a lawyer when in doubt (the
+# EFF answers relay operators at info@eff.org). Lines starting with '#' are
+# notes for you; delete them before sending.
+
+Dear [PROVIDER] abuse team,
+
+Thank you for forwarding the notice from [COPYRIGHT CLAIMANT] about
+[WORK / FILE NAME], reported for [IP ADDRESS] at [TIME AND TIME ZONE].
+
+[IP ADDRESS] runs a Tor exit relay, [NICKNAME]. Tor is a free, open network
+that thousands of volunteers operate so people can use the Internet
+privately and safely. The relay passes encrypted traffic on behalf of Tor
+users; the traffic in the notice did not start on this server, and the
+material is not stored or published here.
+
+As the operator I do not choose, change or inspect what passes through the
+relay, and I keep no logs that could identify the person behind a
+connection. I therefore cannot identify, warn or block an individual user,
+and I have no copy of the material to take down.
+
+# US providers: the next paragraph is the core of the EFF template.
+In the United States this kind of transmission falls under the "mere
+conduit" safe harbor of the DMCA, 17 U.S.C. § 512(a), not the
+notice-and-takedown process of § 512(c), which applies to material stored on
+a server. Courts have held that § 512(c) notices do not apply to conduits
+(RIAA v. Verizon, 351 F.3d 1229 (D.C. Cir. 2003); In re Charter
+Communications, 393 F.3d 771 (8th Cir. 2005)). [PROVIDER] keeps its own safe
+harbor as long as it maintains a repeat-infringer policy; no further action
+is needed for this notice.
+
+You can confirm that [IP ADDRESS] was a Tor exit at the reported time with
+the Tor Project's ExoneraTor service:
+https://metrics.torproject.org/exonerator.html?ip=[IP ADDRESS]&timestamp=[YYYY-MM-DD]
+
+# Optional, if you reduced what the relay allows:
+To lower the chance of file sharing through this relay, it uses Tor's
+reduced exit policy, which blocks most ports used by peer-to-peer software.
+
+If [COPYRIGHT CLAIMANT] needs more information about Tor, the Tor Project
+explains the network at https://www.torproject.org/ and answers abuse
+questions at https://support.torproject.org/abuse/.
+
+Please contact me if you have questions.
+
+Kind regards,
+[YOUR NAME]
+[ORGANISATION, IF ANY]
+[CONTACT EMAIL] · [PHONE]

@@ -1,0 +1,191 @@
+# Prometheus alerting rules for relays set up with tor-relay-setup.
+#
+# Group tor-relay-setup needs the node_exporter textfile collector fed by
+# `tor-relay-setup status --format prometheus` (docs/monitoring/README.md,
+# path a). Group tor-metricsport needs Prometheus to scrape tor's MetricsPort
+# (path b) as job "tor-metricsport". Both assume the instance label names the
+# relay host in both jobs and the tor_instance label names the tor instance on
+# it ("default", or the Debian instance name), as the scrape configs in the
+# README set it; rules match per (instance, tor_instance).
+#
+# Check with: promtool check rules prometheus-rules.yml
+groups:
+  - name: tor-relay-setup
+    rules:
+      - alert: TorRelayStatusStale
+        expr: time() - node_textfile_mtime_seconds{file="tor_relay.prom"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tor-relay-setup metrics on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} are stale"
+          description: "tor_relay.prom was last written {{ $value | humanizeDuration }} ago; check: systemctl status tor-relay-setup-textfile.timer"
+
+      - alert: TorRelayDown
+        expr: tor_relay_setup_relay_configured == 1 and tor_relay_setup_service_active == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tor is not running on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }}"
+          description: "The tor systemd unit is inactive, so the relay is offline. Check: systemctl status tor@default; journalctl -u tor@default -n 50"
+
+      - alert: TorRelayNotListening
+        expr: tor_relay_setup_service_active == 1 and on (instance, tor_instance) max by (instance, tor_instance) (tor_relay_setup_listener) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nothing listens on the ORPort of {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }}"
+          description: "tor runs but has not opened its ORPort."
+
+      - alert: TorRelayUnreachable
+        expr: tor_relay_setup_reachability_failed == 1 and on (instance, tor_instance) tor_relay_setup_reachable{family="ipv4"} == 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The ORPort of {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} is not reachable from outside"
+          description: "Tor's self-test failed; the relay will not be published. Check the firewall and provider firewall for inbound TCP to the ORPort."
+
+      - alert: TorRelayNotRunningInConsensus
+        expr: tor_relay_setup_directory_running == 0
+        for: 3h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tor Metrics does not list {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} as running"
+          description: "The directory authorities did not find the relay reachable. Tor Metrics lags by an hour or two, hence the long for:."
+
+      - alert: TorRelayNotInConsensus
+        expr: tor_relay_setup_directory_published == 0 and on (instance, tor_instance) max_over_time(tor_relay_setup_directory_published[7d]) == 1
+        for: 3h
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} dropped out of the consensus"
+          description: "Tor Metrics listed the relay during the last 7 days but no longer does."
+
+      - alert: TorRelayFamilyKeyMissing
+        expr: tor_relay_setup_family_keys_missing > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} lacks the secret key for a configured FamilyId"
+          description: "Copy NAME.secret_family_key into tor's key directory (owned by debian-tor, mode 0600) and restart tor."
+
+      - alert: TorVersionUnsupported
+        expr: tor_relay_setup_tor_installed == 1 and tor_relay_setup_tor_supported == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tor on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} is too old for the network"
+          description: "Directory authorities reject this tor version. Upgrade tor from the Tor Project repository."
+
+      - alert: TorRelayConsensusWeightDropped
+        expr: tor_relay_setup_consensus_weight < 0.5 * max_over_time(tor_relay_setup_consensus_weight[7d])
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consensus weight of {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} fell by more than half"
+          description: "Current weight {{ $value }}. A restart, a lost flag, lower measured bandwidth, or overload can cause this."
+
+      - alert: TorRelayNeedsAttention
+        expr: tor_relay_setup_warnings > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} reports {{ $value }} problem(s)"
+          description: "Run: sudo tor-relay-setup status"
+
+      - alert: TorRelayOverloaded
+        expr: tor_relay_setup_directory_overloaded == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Relay Search shows {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} as overloaded"
+          description: "Tor published overload-general in the last 72 hours (OOM, dropped ntor onionskins, or TCP port exhaustion). See https://support.torproject.org/relays/performance/overloaded/"
+
+      - alert: TorRelayOverloadSignal
+        expr: tor_relay_setup_overload_signal{signal!="rate_limited"} == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "tor on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} reports {{ $labels.signal }} ({{ $labels.line }})"
+          description: "Run: sudo tor-relay-setup alert run --dry-run for the explanation and remedy."
+
+      - alert: TorRelayAccountingHigh
+        expr: tor_relay_setup_accounting_used_bytes / tor_relay_setup_accounting_max_bytes > 0.9
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} used {{ $value | humanizePercentage }} of AccountingMax"
+          description: "tor hibernates when the budget is used up, until the accounting period ends."
+
+      - alert: TorRelayAccountingRunsOut
+        expr: tor_relay_setup_accounting_exhaustion_timestamp_seconds > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "AccountingMax on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} runs out before the period ends"
+          description: "At the current pace tor starts hibernating early. Lower RelayBandwidthRate to spread the budget."
+
+      - alert: TorRelayHibernating
+        expr: tor_relay_setup_accounting_hibernating == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} used up AccountingMax and hibernates"
+
+  - name: tor-metricsport
+    rules:
+      - alert: TorMetricsPortDown
+        expr: up{job="tor-metricsport"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus cannot scrape tor's MetricsPort on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }}"
+          description: "tor is down, or the tunnel or MetricsPortPolicy blocks the scrape."
+
+      - alert: TorOnionskinsDropped
+        expr: |
+          sum by (instance, tor_instance) (increase(tor_relay_load_onionskins_total{type=~"ntor|ntor_v3",action="dropped"}[6h]))
+            / sum by (instance, tor_instance) (increase(tor_relay_load_onionskins_total{type=~"ntor|ntor_v3"}[6h]))
+            >= 0.01
+        labels:
+          severity: warning
+        annotations:
+          summary: "tor on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} dropped {{ $value | humanizePercentage }} of ntor handshakes"
+          description: "At 1% over 6 hours tor publishes overload-general: a CPU shortage. Give tor more CPU or lower RelayBandwidthRate."
+
+      - alert: TorOutOfMemory
+        expr: sum by (instance, tor_instance) (increase(tor_relay_load_oom_bytes_total[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "tor on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} hit MaxMemInQueues"
+          description: "The OOM handler freed {{ $value | humanize1024 }}B in the last hour; tor publishes overload-general. Add RAM or raise MaxMemInQueues if RAM is free."
+
+      - alert: TorTCPPortExhaustion
+        expr: increase(tor_relay_load_tcp_exhaustion_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "tor on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} ran out of local TCP ports"
+          description: "Widen net.ipv4.ip_local_port_range (for example 15000 64000)."
+
+      - alert: TorSocketsNearLimit
+        expr: tor_relay_load_socket_total{state="opened"} / ignoring (state) tor_relay_load_socket_total{state=""} > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tor on {{ $labels.instance }}{{ with $labels.tor_instance }} ({{ . }}){{ end }} uses {{ $value | humanizePercentage }} of its sockets"
+          description: "Raise LimitNOFILE for the tor unit before tor publishes overload-fd-exhausted."

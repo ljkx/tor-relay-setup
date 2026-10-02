@@ -44,7 +44,7 @@ func (l *logView) start(a *App) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	l.cancel = cancel
 	events := l.events
-	tor := service.Tor{Host: a.opt.Host, Unit: service.DefaultUnit}
+	tor := service.Tor{Host: a.opt.Host, Unit: l.back.selected().Unit}
 	go func() {
 		_ = tor.Follow(ctx, func(s string) {
 			select {
@@ -121,7 +121,7 @@ func (l *logView) view(a *App) string {
 	if !l.follow {
 		state = t.Subtle.Render("○ paused (f resumes)")
 	}
-	return t.Title.Render(" Tor log") + "  " + state + t.Subtle.Render("  · "+service.DefaultUnit) + "\n" + l.vp.View()
+	return t.Title.Render(" Tor log") + "  " + state + t.Subtle.Render("  · "+l.back.selected().Unit) + "\n" + l.vp.View()
 }
 
 func (l *logView) keys(a *App) []string {
@@ -190,6 +190,7 @@ func (f *familyView) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 
 func (f *familyView) start(a *App, key string) (screen, tea.Cmd) {
 	r := f.back.report
+	inst := f.back.selected()
 	switch key {
 	case "c":
 		f.mode, f.name = "create", "relay-family"
@@ -240,13 +241,13 @@ func (f *familyView) start(a *App, key string) (screen, tea.Cmd) {
 		}
 		return newConfirmView(f, question, func() (screen, tea.Cmd) {
 			return newTask(a, back, "Remove legacy MyFamily", func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-				data, err := h.ReadFile(torrcPath)
+				data, err := h.ReadFile(inst.TorrcPath)
 				if err != nil {
 					return "", err
 				}
 				doc := relay.ParseDocument(data)
 				doc.SetMyFamily(nil)
-				if err := writeTorrc(ctx, h, doc.Bytes(), false, out); err != nil {
+				if err := writeTorrc(ctx, h, inst, doc.Bytes(), false, out); err != nil {
 					return "", err
 				}
 				return "MyFamily removed; FamilyId keeps the family together.", nil
@@ -261,8 +262,15 @@ func (f *familyView) start(a *App, key string) (screen, tea.Cmd) {
 
 func (f *familyView) run(a *App) (screen, tea.Cmd) {
 	back := f.back
+	inst := back.selected()
 	keyDir := back.report.Family.KeyDirectory
 	current := append([]string(nil), back.report.Family.IDs...)
+	// Every relay on a server belongs in the same family; the key is
+	// installed per instance, so say what is left to do on the others.
+	others := ""
+	if n := len(back.instances) - 1; n > 0 {
+		others = fmt.Sprintf("\nThis server runs %d more relay instance(s): switch with [ ] and import the same key there too.", n)
+	}
 	switch f.mode {
 	case "create":
 		name := f.name
@@ -277,17 +285,17 @@ func (f *familyView) run(a *App) (screen, tea.Cmd) {
 			if err != nil {
 				return "", err
 			}
-			if err := family.Install(h, keyDir, name, secret, id, plan.TorUser); err != nil {
+			if err := family.Install(h, keyDir, name, secret, id, inst.User); err != nil {
 				return "", err
 			}
 			if id == "" {
 				return "Dry run: a key would be generated and added as a FamilyId.", nil
 			}
 			progress(60, "updating torrc")
-			if err := updateFamilyIDs(ctx, h, append(current, id), out); err != nil {
+			if err := updateFamilyIDs(ctx, h, inst, append(current, id), out); err != nil {
 				return "", err
 			}
-			return "FamilyId " + id + "\nCopy the key to your other relays: Relay family → Share.", nil
+			return "FamilyId " + id + "\nCopy the key to your other relays: Relay family → Share." + others, nil
 		})
 	case "import":
 		path, id := strings.TrimSpace(f.path), strings.TrimSpace(f.id)
@@ -303,13 +311,13 @@ func (f *familyView) run(a *App) (screen, tea.Cmd) {
 				return "", errors.New("no valid FamilyId: put NAME.public_family_id next to the key or enter the ID")
 			}
 			name := strings.TrimSuffix(filepath.Base(path), ".secret_family_key")
-			if err := family.Install(h, keyDir, name, data, id, plan.TorUser); err != nil {
+			if err := family.Install(h, keyDir, name, data, id, inst.User); err != nil {
 				return "", err
 			}
-			if err := updateFamilyIDs(ctx, h, append(current, id), out); err != nil {
+			if err := updateFamilyIDs(ctx, h, inst, append(current, id), out); err != nil {
 				return "", err
 			}
-			return "Joined family " + id + ". Delete the copied key files from where you uploaded them.", nil
+			return "Joined family " + id + ". Delete the copied key files from where you uploaded them." + others, nil
 		})
 	case "remove":
 		drop := f.remove
@@ -320,7 +328,7 @@ func (f *familyView) run(a *App) (screen, tea.Cmd) {
 			}
 		}
 		return newTask(a, back, "Remove FamilyId", func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-			if err := updateFamilyIDs(ctx, h, keep, out); err != nil {
+			if err := updateFamilyIDs(ctx, h, inst, keep, out); err != nil {
 				return "", err
 			}
 			return "Removed " + drop + ". Key files were left in place.", nil
@@ -329,15 +337,15 @@ func (f *familyView) run(a *App) (screen, tea.Cmd) {
 	return f, nil
 }
 
-func updateFamilyIDs(ctx context.Context, h host.Host, ids []string, out func(string)) error {
-	data, err := h.ReadFile(torrcPath)
+func updateFamilyIDs(ctx context.Context, h host.Host, inst relay.Instance, ids []string, out func(string)) error {
+	data, err := h.ReadFile(inst.TorrcPath)
 	if err != nil {
 		return err
 	}
 	doc := relay.ParseDocument(data)
 	doc.SetFamilyIDs(ids)
 	// Sandbox 1 cannot open new key files after start-up: restart, not reload.
-	return writeTorrc(ctx, h, doc.Bytes(), true, out)
+	return writeTorrc(ctx, h, inst, doc.Bytes(), true, out)
 }
 
 func (f *familyView) view(a *App) string {
@@ -384,7 +392,7 @@ func (f *familyView) view(a *App) string {
 	if f.mode == "share" {
 		body += "\n" + panel(t, "Share this family", family.ShareInstructions(r.Family.Keys, "NEW-RELAY"), w, true)
 	}
-	return t.Title.Render(" Relay family") + t.Subtle.Render(" · Tor 0.4.9 FamilyId") + "\n\n" + body
+	return t.Title.Render(" Relay family") + t.Subtle.Render(instanceTitle(f.back.selected())+" · Tor 0.4.9 FamilyId") + "\n\n" + body
 }
 
 func (f *familyView) keys(a *App) []string {
@@ -403,35 +411,48 @@ type editView struct {
 	ans  *answers
 	doc  *relay.Document
 	was  config.Setup
+	// metrics is the MetricsPort address used when it is switched on.
+	metrics string
 }
 
 func newEditView(a *App, back *console) (screen, tea.Cmd) {
-	data, err := a.opt.Host.ReadFile(torrcPath)
+	inst := back.selected()
+	data, err := a.opt.Host.ReadFile(inst.TorrcPath)
 	if err != nil {
-		return back, toast("Cannot read " + torrcPath + ": " + err.Error())
+		return back, toast("Cannot read " + inst.TorrcPath + ": " + err.Error())
 	}
 	doc := relay.ParseDocument(data)
 	s := config.FromDocument(doc)
-	e := &editView{back: back, ans: answersFrom(s), doc: doc, was: s}
+	if !inst.IsDefault() {
+		s.Relay.Instance = inst.Name
+	}
+	// The address MetricsPort gets when switched on: the current one, or a
+	// port no other relay instance on this server uses.
+	withMetrics := s
+	withMetrics.Relay.MetricsPort = true
+	e := &editView{back: back, ans: answersFrom(s), doc: doc, was: s, metrics: plan.ResolveMetricsAddress(a.opt.Host, withMetrics)}
 	e.ans.ContactFormat = "free"
 	ans := e.ans
+	relayFields := []huh.Field{
+		huh.NewInput().Title("Nickname").Value(&ans.Nickname).Validate(func(s string) error {
+			if !relay.ValidNickname(strings.TrimSpace(s)) {
+				return errors.New("1–19 letters or digits")
+			}
+			return nil
+		}),
+		huh.NewInput().Title("ContactInfo").Value(&ans.ContactFree).Validate(func(s string) error {
+			if !relay.ValidContactInfo(strings.TrimSpace(s)) {
+				return errors.New("required, max 250 characters, no '#'")
+			}
+			return nil
+		}),
+		newConfirm().Title("MetricsPort on " + e.metrics + "?").Value(&ans.Metrics),
+	}
+	if !s.IsBridge() { // tor refuses pluggable transports with Sandbox 1
+		relayFields = append(relayFields, newConfirm().Title("Sandbox 1?").Description("Changing this restarts Tor.").Value(&ans.Sandbox))
+	}
 	e.form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Nickname").Value(&ans.Nickname).Validate(func(s string) error {
-				if !relay.ValidNickname(strings.TrimSpace(s)) {
-					return errors.New("1–19 letters or digits")
-				}
-				return nil
-			}),
-			huh.NewInput().Title("ContactInfo").Value(&ans.ContactFree).Validate(func(s string) error {
-				if !relay.ValidContactInfo(strings.TrimSpace(s)) {
-					return errors.New("required, max 250 characters, no '#'")
-				}
-				return nil
-			}),
-			newConfirm().Title("MetricsPort on 127.0.0.1:9035?").Value(&ans.Metrics),
-			newConfirm().Title("Sandbox 1?").Description("Changing this restarts Tor.").Value(&ans.Sandbox),
-		).Title("Relay"),
+		huh.NewGroup(relayFields...).Title("Relay"),
 		huh.NewGroup(
 			huh.NewSelect[string]().Title("Bandwidth").Options(bandwidthOptions(ans.BandwidthMode)...).Value(&ans.BandwidthMode),
 		).Title("Bandwidth"),
@@ -480,19 +501,22 @@ func (e *editView) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 		doc.Set("ContactInfo", relay.Quote(s.Relay.Contact))
 		doc.SetBandwidth(bw)
 		if s.Relay.MetricsPort {
-			doc.SetMetricsPort(config.DefaultMetricsPort)
+			doc.SetMetricsPort(e.metrics)
 		} else {
 			doc.SetMetricsPort("")
 		}
 		restart := s.Relay.Sandbox != e.was.Relay.Sandbox
-		if s.Relay.Sandbox {
+		switch {
+		case e.was.IsBridge(): // a bridge never sandboxes; leave torrc alone
+		case s.Relay.Sandbox:
 			doc.Set("Sandbox", "1")
-		} else {
+		default:
 			doc.Set("Sandbox", "0")
 		}
 		data := doc.Bytes()
+		inst := e.back.selected()
 		return newTask(a, e.back, "Apply settings", func(ctx context.Context, h host.Host, out func(string), progress func(float64, string)) (string, error) {
-			if err := writeTorrc(ctx, h, data, restart, out); err != nil {
+			if err := writeTorrc(ctx, h, inst, data, restart, out); err != nil {
 				return "", err
 			}
 			return "Settings applied.", nil
@@ -502,7 +526,7 @@ func (e *editView) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 }
 
 func (e *editView) view(a *App) string {
-	return a.theme.Title.Render(" Edit settings") + a.theme.Subtle.Render(" · verified with tor before anything is written") +
+	return a.theme.Title.Render(" Edit settings") + a.theme.Subtle.Render(instanceTitle(e.back.selected())+" · verified with tor before anything is written") +
 		"\n\n" + panel(a.theme, "", e.form.View(), clamp(a.contentWidth(), 40, 100), true)
 }
 

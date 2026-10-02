@@ -26,8 +26,13 @@ type review struct {
 }
 
 func newReview(a *App, s config.Setup, back *wizard) *review {
+	// The MetricsPort address this host gets (another relay instance may
+	// already use 9035); preflight picks the same one.
+	s.Relay.MetricsAddress = plan.ResolveMetricsAddress(a.opt.Host, s)
 	r := &review{setup: s, back: back, vp: viewport.New()}
 	if err := s.Validate(); err != nil {
+		r.problem = err.Error()
+	} else if err := plan.Conflicts(s, plan.OtherInstances(a.opt.Host, s.Instance())); err != nil {
 		r.problem = err.Error()
 	}
 	r.resize(a)
@@ -57,6 +62,9 @@ func (r *review) render(a *App) string {
 		if s.Exit.Unbound {
 			mode += " · local Unbound DNS"
 		}
+		if s.Exit.Notice {
+			mode += " · exit notice on port 80"
+		}
 	}
 	ipv6 := "disabled"
 	if s.Relay.IPv6 != "" {
@@ -69,12 +77,36 @@ func (r *review) render(a *App) string {
 	case "import":
 		fam = "import " + s.Family.ImportKey
 	}
-	relayRows := [][2]string{
+	orport := itoa(s.Relay.ORPort) + " (IPv4) · IPv6 " + ipv6
+	var bridgeRows [][2]string
+	if s.IsBridge() {
+		fam = "none (bridges never join one)"
+		mode = "Bridge · obfs4 · distribution " + s.Distribution()
+		bridgeRows = [][2]string{{"obfs4 port", itoa(s.Bridge.Obfs4Port)}}
+		if s.IsWebTunnel() {
+			mode = "Bridge · WebTunnel · distribution " + s.Distribution()
+			orport = "127.0.0.1:auto (behind the website)"
+			web := "nginx (managed) · certificate " + s.Bridge.Certificate
+			if !s.ManagedNginx() {
+				web = "your own web server (snippet below)"
+			}
+			bridgeRows = [][2]string{{"URL", truncate(s.WebTunnelURL(), col-18)}, {"Web server", web}}
+		}
+	}
+	var relayRows [][2]string
+	if inst := s.Instance(); !inst.IsDefault() {
+		relayRows = append(relayRows, [2]string{"Instance", inst.Name + " · " + inst.Unit})
+	}
+	relayRows = append(relayRows, [][2]string{
 		{"Mode", mode},
 		{"Nickname", s.Relay.Nickname},
 		{"ContactInfo", truncate(s.Relay.Contact, col-18)},
-		{"ORPort", itoa(s.Relay.ORPort) + " (IPv4) · IPv6 " + ipv6},
-		{"Family", fam},
+		{"ORPort", orport},
+	}...)
+	relayRows = append(relayRows, bridgeRows...)
+	relayRows = append(relayRows, [2]string{"Family", fam})
+	if s.Relay.OfflineMasterKey {
+		relayRows = append(relayRows, [2]string{"Identity", "offline master key (OfflineMasterKey 1)"})
 	}
 
 	bw, _ := s.Bandwidth.Resolve()
@@ -100,10 +132,13 @@ func (r *review) render(a *App) string {
 		{"Monthly cap", capText},
 		{"Updates", yesNo(s.System.UnattendedUpgrades) + " (security + Tor Project)"},
 		{"Firewall", s.System.Firewall},
-		{"MetricsPort", map[bool]string{true: config.DefaultMetricsPort + " (local only)", false: "off"}[s.Relay.MetricsPort]},
+		{"MetricsPort", map[bool]string{true: s.RelayConfig(nil).MetricsPort + " (local only)", false: "off"}[s.Relay.MetricsPort]},
 		{"Sandbox", yesNo(s.Relay.Sandbox)},
 		{"Nyx", yesNo(s.System.Nyx)},
 		{"Hostname", host},
+	}
+	if s.System.Tuning {
+		sysRows = append(sysRows, [2]string{"Tuning", "kernel limits for a fast relay"})
 	}
 
 	steps := plan.Build(s, a.checks.Facts)
@@ -140,10 +175,25 @@ func (r *review) render(a *App) string {
 	if r.problem != "" {
 		parts = append(parts, panel(t, "Needs attention", t.BadText.Render(r.problem), w, true))
 	}
+	if advice := s.Warnings(); len(advice) > 0 {
+		var ab strings.Builder
+		for i, line := range advice {
+			if i > 0 {
+				ab.WriteString("\n")
+			}
+			ab.WriteString(t.WarnText.Render(iconWarn + " " + line))
+		}
+		parts = append(parts, panel(t, "Advice", ab.String(), w, false))
+	}
 	parts = append(parts,
 		panel(t, fmt.Sprintf("What will change (%d)", len(plan.Changes(steps))), changes.String(), w, false),
-		panel(t, "/etc/tor/torrc", torrc, w, false),
+		panel(t, s.Instance().TorrcPath, torrc, w, false),
 	)
+	if s.IsWebTunnel() && !s.ManagedNginx() {
+		snippet := "Inside the HTTPS server block for " + s.Bridge.Domain + " (nginx; translate for other servers):\n\n" +
+			strings.TrimRight(plan.NginxLocation(s.Bridge.Path, s.WebTunnelPort()), "\n")
+		parts = append(parts, panel(t, "Your web server needs this", t.Subtle.Render(snippet), w, false))
+	}
 	return strings.Join(parts, "\n")
 }
 

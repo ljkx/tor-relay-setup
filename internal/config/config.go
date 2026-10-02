@@ -25,6 +25,7 @@ const DefaultMetricsPort = "127.0.0.1:9035"
 type Setup struct {
 	Relay     Relay         `toml:"relay"`
 	Exit      Exit          `toml:"exit"`
+	Bridge    Bridge        `toml:"bridge"`
 	Family    Family        `toml:"family"`
 	Bandwidth BandwidthPlan `toml:"bandwidth"`
 	System    System        `toml:"system"`
@@ -35,10 +36,20 @@ type Relay struct {
 	Nickname    string `toml:"nickname"`
 	Contact     string `toml:"contact"`
 	ORPort      int    `toml:"or_port"`
-	Mode        string `toml:"mode"` // guard | exit
+	Mode        string `toml:"mode"` // guard | exit | bridge
 	IPv6        string `toml:"ipv6"` // global address, or empty for none
 	Sandbox     bool   `toml:"sandbox"`
 	MetricsPort bool   `toml:"metrics_port"`
+	// OfflineMasterKey writes OfflineMasterKey 1: the ed25519 master
+	// identity key is kept off the server (see `tor-relay-setup keys`).
+	OfflineMasterKey bool `toml:"offline_master_key,omitempty"`
+	// Instance names the Debian tor instance (tor-instance-create NAME,
+	// unit tor@NAME); empty or "default" is /etc/tor/torrc (tor@default).
+	Instance string `toml:"instance"`
+	// MetricsAddress is the MetricsPort address picked for this host when
+	// MetricsPort is on (plan.ResolveMetricsAddress); empty means
+	// DefaultMetricsPort. It is never saved: every host picks a free port.
+	MetricsAddress string `toml:"-"`
 }
 
 // Exit holds exit-relay settings; ignored for guard relays.
@@ -46,11 +57,60 @@ type Exit struct {
 	// ProviderPermission must be true: the operator confirms the provider
 	// allows exits and that abuse complaints will be handled.
 	ProviderPermission bool   `toml:"provider_permission"`
-	Policy             string `toml:"policy"` // reduced | default
-	IPv6Exit           bool   `toml:"ipv6_exit"`
-	Unbound            bool   `toml:"unbound"`
-	LockResolvConf     bool   `toml:"lock_resolv_conf"`
+	Policy             string `toml:"policy"` // reduced | default | web | custom
+	// CustomPolicy holds the ExitPolicy entries of policy "custom", first
+	// match wins, ending with "reject *:*" (or "accept *:*").
+	CustomPolicy   []string `toml:"custom_policy,omitempty"`
+	IPv6Exit       bool     `toml:"ipv6_exit"`
+	Unbound        bool     `toml:"unbound"`
+	LockResolvConf bool     `toml:"lock_resolv_conf"`
+	// Notice serves an exit notice page on port 80 with tor's own DirPort
+	// (DirPortFrontPage), as Tor's exit guidelines recommend.
+	Notice bool `toml:"notice,omitempty"`
 }
+
+// Bridge holds bridge settings; ignored unless relay.mode is "bridge".
+type Bridge struct {
+	Transport string `toml:"transport"` // obfs4 | webtunnel
+	// Obfs4Port is the public obfs4 port; it must differ from the ORPort.
+	Obfs4Port int `toml:"obfs4_port,omitempty"`
+	// Distribution is tor's BridgeDistribution: how the Tor Project hands
+	// the bridge out (any, https, email, settings, telegram), or none. Empty
+	// means any for obfs4 and https for WebTunnel.
+	Distribution string `toml:"distribution"`
+
+	// WebTunnel: Domain points at this server and serves HTTPS; Path is the
+	// secret location proxied to the webtunnel server (generated when
+	// empty, and kept from torrc on later runs).
+	Domain    string `toml:"domain,omitempty"`
+	Path      string `toml:"path,omitempty"`
+	LocalPort int    `toml:"local_port,omitempty"` // webtunnel server, default 15000
+	// WebServer is "nginx" (installed and configured by this tool) or
+	// "manual" (you run the web server; the tool prints the snippet).
+	WebServer string `toml:"web_server,omitempty"`
+	// Certificate for nginx: "existing" uses CertFile and KeyFile; "certbot"
+	// requests one from Let's Encrypt with certbot --nginx, which needs
+	// CertbotAgreeTOS (certbot accepts Let's Encrypt's terms for you).
+	Certificate     string `toml:"certificate,omitempty"`
+	CertFile        string `toml:"cert_file,omitempty"`
+	KeyFile         string `toml:"key_file,omitempty"`
+	CertbotEmail    string `toml:"certbot_email,omitempty"`
+	CertbotAgreeTOS bool   `toml:"certbot_agree_tos,omitempty"`
+
+	// Plugin is the transport binary picked for this host (lyrebird where
+	// Debian packages it, else obfs4proxy); never saved.
+	Plugin string `toml:"-"`
+}
+
+// Bridge transports, web servers and certificate sources.
+const (
+	WebServerNginx    = "nginx"
+	WebServerManual   = "manual"
+	CertExisting      = "existing"
+	CertCertbot       = "certbot"
+	DefaultObfs4Port  = 8443
+	DefaultBridgePort = 9443 // bridge ORPort suggestion: Tor asks bridges to avoid 9001
+)
 
 // Family describes the relay family (Tor 0.4.9 FamilyId).
 type Family struct {
@@ -85,6 +145,9 @@ type System struct {
 	Nyx                bool   `toml:"nyx"`
 	Firewall           string `toml:"firewall"` // auto | none
 	EnableUFW          bool   `toml:"enable_ufw"`
+	// Tuning applies conservative kernel and service limits for
+	// high-bandwidth relays (see plan's tuning step).
+	Tuning bool `toml:"tuning"`
 }
 
 // Default returns the recommended answers for a new guard relay.
@@ -92,6 +155,7 @@ func Default() Setup {
 	return Setup{
 		Relay:     Relay{ORPort: 9001, Mode: string(relay.ModeGuard), Sandbox: true},
 		Exit:      Exit{Policy: string(relay.PolicyReduced), IPv6Exit: true, Unbound: true},
+		Bridge:    Bridge{Transport: string(relay.TransportObfs4)},
 		Family:    Family{Mode: "none", KeyName: "relay-family"},
 		Bandwidth: BandwidthPlan{Mode: string(relay.BandwidthSteady), HeadroomPercent: 10, Billing: string(relay.RuleSum)},
 		System:    System{UnattendedUpgrades: true, Nyx: true, Firewall: "auto", EnableUFW: true},
@@ -135,8 +199,184 @@ func (s Setup) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Instance returns the tor instance this setup configures. An invalid name
+// yields the default instance; Validate reports it.
+func (s Setup) Instance() relay.Instance {
+	inst, err := relay.Named(s.Relay.Instance)
+	if err != nil {
+		return relay.DefaultInstance()
+	}
+	return inst
+}
+
 // IsExit reports whether this is an exit relay.
 func (s Setup) IsExit() bool { return s.Relay.Mode == string(relay.ModeExit) }
+
+// IsBridge reports whether this is a bridge.
+func (s Setup) IsBridge() bool { return s.Relay.Mode == string(relay.ModeBridge) }
+
+// IsWebTunnel reports whether this is a WebTunnel bridge.
+func (s Setup) IsWebTunnel() bool {
+	return s.IsBridge() && s.Bridge.Transport == string(relay.TransportWebTunnel)
+}
+
+// ManagedNginx reports whether this tool installs and configures nginx for a
+// WebTunnel bridge.
+func (s Setup) ManagedNginx() bool { return s.IsWebTunnel() && s.Bridge.WebServer != WebServerManual }
+
+// UsesCertbot reports whether apply requests a certificate with certbot.
+func (s Setup) UsesCertbot() bool { return s.ManagedNginx() && s.Bridge.Certificate == CertCertbot }
+
+// WebTunnelPort is the local port of the webtunnel server.
+func (s Setup) WebTunnelPort() int {
+	if s.Bridge.LocalPort > 0 {
+		return s.Bridge.LocalPort
+	}
+	return relay.DefaultWebTunnelPort
+}
+
+// PendingPath stands in for a WebTunnel path that apply generates.
+const PendingPath = "GENERATED-DURING-APPLY"
+
+// WebTunnelURL is the bridge's WebTunnel URL; PendingPath marks a path that
+// is generated during apply.
+func (s Setup) WebTunnelURL() string {
+	p := s.Bridge.Path
+	if p == "" {
+		p = PendingPath
+	}
+	return relay.WebTunnelURL(s.Bridge.Domain, p)
+}
+
+// Plugin is the transport binary torrc names.
+func (s Setup) Plugin() string {
+	switch {
+	case s.Bridge.Plugin != "":
+		return s.Bridge.Plugin
+	case s.IsWebTunnel():
+		return relay.WebTunnelPath
+	}
+	return relay.Obfs4ProxyPath
+}
+
+// Distribution is the BridgeDistribution value; WebTunnel bridges default
+// to https, the only distributor that hands them out.
+func (s Setup) Distribution() string {
+	switch {
+	case s.Bridge.Distribution != "":
+		return s.Bridge.Distribution
+	case s.IsWebTunnel():
+		return "https"
+	}
+	return "any"
+}
+
+// Port is a TCP port the relay needs reachable from the Internet.
+type Port struct {
+	Number int
+	Label  string // firewall rule comment, e.g. "Tor relay ORPort"
+}
+
+// PublicPorts lists the TCP ports to open in the firewall: the ORPort, plus
+// the obfs4 port, the WebTunnel web server, or the exit notice.
+func (s Setup) PublicPorts() []Port {
+	switch {
+	case s.IsWebTunnel():
+		ports := []Port{{443, "Tor WebTunnel bridge HTTPS"}}
+		if s.UsesCertbot() {
+			ports = append(ports, Port{80, "Tor WebTunnel ACME HTTP-01"})
+		}
+		return ports
+	case s.IsBridge():
+		return []Port{{s.Relay.ORPort, "Tor bridge ORPort"}, {s.Bridge.Obfs4Port, "Tor bridge obfs4"}}
+	case s.IsExit() && s.Exit.Notice:
+		return []Port{{s.Relay.ORPort, "Tor relay ORPort"}, {relay.ExitNoticePort, "Tor exit notice"}}
+	}
+	return []Port{{s.Relay.ORPort, "Tor relay ORPort"}}
+}
+
+// validateBridge checks the [bridge] table of a bridge setup.
+func (s Setup) validateBridge() []error {
+	var errs []error
+	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+	b := s.Bridge
+	if b.Distribution != "" && !relay.ValidDistribution(b.Distribution) {
+		add("bridge.distribution: one of %s", strings.Join(relay.Distributions, ", "))
+	}
+	switch relay.Transport(b.Transport) {
+	case relay.TransportObfs4:
+		switch {
+		case !relay.ValidPort(b.Obfs4Port):
+			add("bridge.obfs4_port: must be 1–65535")
+		case b.Obfs4Port == s.Relay.ORPort:
+			add("bridge.obfs4_port: must differ from relay.or_port (both must be reachable)")
+		}
+	case relay.TransportWebTunnel:
+		if !relay.ValidDomain(b.Domain) {
+			add("bridge.domain: a DNS name pointing at this server, e.g. bridge.example.org")
+		}
+		if b.Path != "" && !relay.ValidWebTunnelPath(b.Path) {
+			add("bridge.path: 8–128 letters, digits, '.', '_', '~' or '-' (empty generates one)")
+		}
+		if b.LocalPort != 0 && !relay.ValidPort(b.LocalPort) {
+			add("bridge.local_port: must be 1–65535")
+		}
+		switch b.WebServer {
+		case "", WebServerNginx:
+			switch b.Certificate {
+			case CertExisting:
+				if !strings.HasPrefix(b.CertFile, "/") || !strings.HasPrefix(b.KeyFile, "/") {
+					add("bridge.cert_file and bridge.key_file: absolute paths of the certificate chain and its key")
+				}
+			case CertCertbot:
+				if !b.CertbotAgreeTOS {
+					add("bridge.certbot_agree_tos: set it to true to let certbot accept the Let's Encrypt Subscriber Agreement for you")
+				}
+				if b.CertbotEmail != "" && !relay.ValidEmail(b.CertbotEmail) {
+					add("bridge.certbot_email: an email address, or empty")
+				}
+			default:
+				add("bridge.certificate: \"existing\" (cert_file and key_file) or \"certbot\"")
+			}
+		case WebServerManual:
+		default:
+			add("bridge.web_server: \"nginx\" or \"manual\"")
+		}
+	default:
+		add("bridge.transport: \"obfs4\" or \"webtunnel\"")
+	}
+	if s.Relay.Sandbox {
+		add("relay.sandbox: tor refuses pluggable transports with Sandbox 1; set sandbox = false for bridges")
+	}
+	if (s.Family.Mode != "" && s.Family.Mode != "none") || len(s.Family.Keep) > 0 {
+		add("family: bridges must not join a relay family (it would link the bridge to your public relays); set family.mode = \"none\"")
+	}
+	return errs
+}
+
+// Warnings returns advice that does not block the setup, such as ports
+// censors are known to scan.
+func (s Setup) Warnings() []string {
+	var w []string
+	if s.IsBridge() {
+		if s.Relay.ORPort == 9001 && !s.IsWebTunnel() {
+			w = append(w, "ORPort 9001 is commonly associated with Tor and censors scan for it; Tor's bridge guide asks bridges to avoid it")
+		}
+		if s.Bridge.Obfs4Port == 9001 && !s.IsWebTunnel() {
+			w = append(w, "obfs4 port 9001 is commonly associated with Tor and censors scan for it")
+		}
+		if p := s.Bridge.Obfs4Port; !s.IsWebTunnel() && p > 0 && p < 1024 {
+			w = append(w, fmt.Sprintf("obfs4 port %d is below 1024: the transport binary gets CAP_NET_BIND_SERVICE (setcap) and the tor unit NoNewPrivileges=no, as Tor's bridge guide describes; a package upgrade can drop the capability (status warns)", p))
+		}
+		if d := s.Distribution(); s.IsWebTunnel() && d != "https" && d != "none" {
+			w = append(w, "WebTunnel bridges are only handed out by the https distributor; with \""+d+"\" nobody receives this bridge unless you share it")
+		}
+		if s.Distribution() == "none" {
+			w = append(w, "BridgeDistribution none: the Tor Project never hands this bridge out; share its bridge line yourself")
+		}
+	}
+	return w
+}
 
 // Validate checks every answer and returns all problems at once.
 func (s Setup) Validate() error {
@@ -154,23 +394,35 @@ func (s Setup) Validate() error {
 		add("relay.or_port: must be 1–65535")
 	}
 	switch r.Mode {
-	case string(relay.ModeGuard), string(relay.ModeExit):
+	case string(relay.ModeGuard), string(relay.ModeExit), string(relay.ModeBridge):
 	default:
-		add("relay.mode: must be \"guard\" or \"exit\"")
+		add("relay.mode: must be \"guard\", \"exit\" or \"bridge\"")
 	}
 	if r.IPv6 != "" && !relay.ValidIPv6(r.IPv6) {
 		add("relay.ipv6: %q is not a global IPv6 address", r.IPv6)
+	}
+	if _, err := relay.Named(r.Instance); err != nil {
+		add("relay.instance: empty or \"default\" for /etc/tor/torrc, otherwise 1–27 letters or digits (tor-instance-create NAME)")
 	}
 
 	if s.IsExit() {
 		if !s.Exit.ProviderPermission {
 			add("exit.provider_permission: confirm your provider allows Tor exits and that abuse complaints are handled")
 		}
-		switch s.Exit.Policy {
-		case string(relay.PolicyReduced), string(relay.PolicyDefault):
-		default:
-			add("exit.policy: must be \"reduced\" or \"default\"")
+		switch p := relay.ExitPolicy(s.Exit.Policy); {
+		case !relay.ValidExitPolicy(p):
+			add("exit.policy: must be \"reduced\", \"default\", \"web\" or \"custom\"")
+		case p == relay.PolicyCustom:
+			if _, err := relay.NormalizePolicy(s.Exit.CustomPolicy); err != nil {
+				add("exit.custom_policy: %v", err)
+			}
 		}
+		if s.Exit.Notice && r.ORPort == relay.ExitNoticePort {
+			add("exit.notice: the notice is served on port %d, which is the ORPort", relay.ExitNoticePort)
+		}
+	}
+	if s.IsBridge() {
+		errs = append(errs, s.validateBridge()...)
 	}
 
 	switch s.Family.Mode {
@@ -301,6 +553,31 @@ func (s Setup) RelayConfig(familyIDs []string) relay.Config {
 	}
 	if s.Relay.MetricsPort {
 		c.MetricsPort = DefaultMetricsPort
+		if s.Relay.MetricsAddress != "" {
+			c.MetricsPort = s.Relay.MetricsAddress
+		}
+	}
+	c.OfflineMasterKey = s.Relay.OfflineMasterKey
+	if s.IsExit() {
+		if c.ExitPolicy == relay.PolicyCustom {
+			c.ExitPolicyLines, _ = relay.NormalizePolicy(s.Exit.CustomPolicy)
+		}
+		if s.Exit.Notice {
+			c.ExitNotice = s.Instance().ExitNoticePath()
+		}
+	}
+	if s.IsBridge() {
+		// Bridges never join a family and cannot sandbox their transport.
+		c.FamilyIDs, c.FamilyPending, c.Sandbox, c.IPv6Exit = nil, false, false, false
+		c.Bridge = relay.Bridge{
+			Transport:    relay.Transport(s.Bridge.Transport),
+			Plugin:       s.Plugin(),
+			Port:         s.Bridge.Obfs4Port,
+			Distribution: s.Distribution(),
+		}
+		if s.IsWebTunnel() {
+			c.Bridge.Port, c.Bridge.URL = s.WebTunnelPort(), s.WebTunnelURL()
+		}
 	}
 	return c
 }

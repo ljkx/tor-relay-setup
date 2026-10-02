@@ -7,17 +7,17 @@
 │  l  Live logs                  │ ╰─────────────────────────────────────────────────────────────────────────────────╯
 │  f  Relay family               │ ╭─────────────────────────────────────────────────────────────────────────────────╮
 │  e  Edit settings              │ │ Relay                                                                           │
-│  s  Restart Tor                │ │ Nickname     GoodRelay                                                          │
-│  o  Reload Tor                 │ │ Fingerprint  ABCDEF0123456789ABCDEF0123456789ABCDEF01                           │
-│  p  Stop / start Tor           │ │ Mode         guard / middle                                                     │
-│  u  Update Tor                 │ │ ORPort       9001 (IPv4 + IPv6)                                                 │
-│  b  Back up keys               │ ╰─────────────────────────────────────────────────────────────────────────────────╯
-│  w  Reconfigure                │ ╭─────────────────────────────────────────────────────────────────────────────────╮
-│  q  Quit                       │ │ Health                                                                          │
-╰────────────────────────────────╯ │ Service       ✗ stopped                                                         │
-                                   │ tor           ✓ 0.4.9.3                                                         │
-                                   │ Listener      ✓ TCP 9001                                                        │
-                                   │ Reachability  ✓ reachable (IPv4 + IPv6)                                         │
+│  k  Identity keys              │ │ Nickname     GoodRelay                                                          │
+│  c  ContactInfo proof          │ │ Fingerprint  ABCDEF0123456789ABCDEF0123456789ABCDEF01                           │
+│  s  Restart Tor                │ │ Mode         guard / middle                                                     │
+│  o  Reload Tor                 │ │ ORPort       9001 (IPv4 + IPv6)                                                 │
+│  p  Stop / start Tor           │ ╰─────────────────────────────────────────────────────────────────────────────────╯
+│  u  Update Tor                 │ ╭─────────────────────────────────────────────────────────────────────────────────╮
+│  b  Back up keys               │ │ Health                                                                          │
+│  w  Reconfigure                │ │ Service       ✗ stopped                                                         │
+│  n  Add a relay                │ │ tor           ✓ 0.4.9.3                                                         │
+│  q  Quit                       │ │ Listener      ✓ TCP 9001                                                        │
+╰────────────────────────────────╯ │ Reachability  ✓ reachable (IPv4 + IPv6)                                         │
                                    ╰─────────────────────────────────────────────────────────────────────────────────╯
                                    ╭─────────────────────────────────────────────────────────────────────────────────╮
                                    │ Family                                                                          │

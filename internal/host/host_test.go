@@ -41,6 +41,22 @@ func TestLocalWriteFileBacksUpAndIsAtomic(t *testing.T) {
 	}
 }
 
+func TestLocalRunFeedsStdin(t *testing.T) {
+	l := NewLocal()
+	res, err := l.Run(context.Background(), Command{Name: "sh", Args: []string{"-c", "tr a-z A-Z"}, Stdin: []byte("secret body\n")})
+	if err != nil || res.Output != "SECRET BODY\n" {
+		t.Fatalf("output %q, %v", res.Output, err)
+	}
+	// Without Stdin the program reads the null device and sees EOF at once.
+	res, err = l.Run(context.Background(), Command{Name: "sh", Args: []string{"-c", "wc -c"}})
+	if err != nil || strings.TrimSpace(res.Output) != "0" {
+		t.Fatalf("output %q, %v", res.Output, err)
+	}
+	if s := (Command{Name: "sendmail", Args: []string{"-t"}, Stdin: []byte("To: x")}).String(); s != "sendmail -t" {
+		t.Fatalf("String() = %q; stdin must not be shown", s)
+	}
+}
+
 func TestLocalStreamCapturesOutputStatusFDAndExitCode(t *testing.T) {
 	l := NewLocal()
 	var lines, status []string

@@ -109,12 +109,12 @@ func TestMarshalParseRoundTrip(t *testing.T) {
 	custom := Setup{
 		Relay: Relay{
 			Nickname: "RoundTrip", Contact: `email:ops[]example.org "quoted" \ back`, ORPort: 443,
-			Mode: "exit", IPv6: "2001:db8::10", Sandbox: false, MetricsPort: true,
+			Mode: "exit", IPv6: "2001:db8::10", Sandbox: false, MetricsPort: true, Instance: "relay2",
 		},
 		Exit:      Exit{ProviderPermission: true, Policy: "default", IPv6Exit: false, Unbound: false, LockResolvConf: true},
 		Family:    Family{Mode: "import", KeyName: "fam", ImportKey: "/root/fam.secret_family_key", FamilyID: famID("Q"), Keep: []string{famID("A"), famID("B")}},
 		Bandwidth: BandwidthPlan{Mode: "manual", MonthlyQuota: "", HeadroomPercent: 0, Billing: "out", RateMbit: 25, BurstMbit: 60},
-		System:    System{Hostname: "relay.example.org", UnattendedUpgrades: false, Nyx: false, Firewall: "none", EnableUFW: false},
+		System:    System{Hostname: "relay.example.org", UnattendedUpgrades: false, Nyx: false, Firewall: "none", EnableUFW: false, Tuning: true},
 	}
 	for name, s := range map[string]Setup{"default": Default(), "valid guard": validGuard(), "every field changed": custom} {
 		t.Run(name, func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestValidateReportsEachProblem(t *testing.T) {
 		{"contact with hash", func(s *Setup) { s.Relay.Contact = "ops #1" }, "relay.contact"},
 		{"port zero", func(s *Setup) { s.Relay.ORPort = 0 }, "relay.or_port"},
 		{"port too high", func(s *Setup) { s.Relay.ORPort = 65536 }, "relay.or_port"},
-		{"bad mode", func(s *Setup) { s.Relay.Mode = "bridge" }, "relay.mode"},
+		{"bad mode", func(s *Setup) { s.Relay.Mode = "middle" }, "relay.mode"},
 		{"link-local IPv6", func(s *Setup) { s.Relay.IPv6 = "fe80::1" }, "relay.ipv6"},
 		{"bracketed IPv6", func(s *Setup) { s.Relay.IPv6 = "[2001:db8::1]" }, "relay.ipv6"},
 		{"bad family mode", func(s *Setup) { s.Family.Mode = "join" }, "family.mode"},
@@ -221,7 +221,7 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 	t.Parallel()
 	s := validGuard()
 	s.Relay.Nickname = "not valid!"
-	s.Relay.Mode = "bridge"
+	s.Relay.Mode = "middle"
 	s.Family.Mode = "join"
 	s.System.Hostname = "under_score"
 	s.Bandwidth.Mode = "turbo"
@@ -630,5 +630,61 @@ func TestFromDocumentEmpty(t *testing.T) {
 	want.Bandwidth = BandwidthPlan{Mode: "none", HeadroomPercent: 10, Billing: "max"}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("FromDocument(empty) = %+v, want %+v", s, want)
+	}
+}
+
+func TestInstance(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, instance string
+		valid          bool
+		unit           string
+	}{
+		{"empty is the default instance", "", true, "tor@default"},
+		{"default by name", "default", true, "tor@default"},
+		{"named", "relay2", true, "tor@relay2"},
+		{"dash rejected like tor-instance-create", "relay-2", false, "tor@default"},
+		{"path rejected", "../x", false, "tor@default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := validGuard()
+			s.Relay.Instance = tt.instance
+			err := s.Validate()
+			if (err == nil) != tt.valid {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tt.valid)
+			}
+			if err != nil && !strings.Contains(err.Error(), "relay.instance") {
+				t.Errorf("Validate() = %v, want it to name relay.instance", err)
+			}
+			if got := s.Instance().Unit; got != tt.unit {
+				t.Errorf("Instance().Unit = %q, want %q", got, tt.unit)
+			}
+		})
+	}
+}
+
+func TestRelayConfigMetricsAddress(t *testing.T) {
+	t.Parallel()
+	s := validGuard()
+	s.Relay.MetricsPort = true
+	if got := s.RelayConfig(nil).MetricsPort; got != DefaultMetricsPort {
+		t.Errorf("MetricsPort = %q, want %q", got, DefaultMetricsPort)
+	}
+	s.Relay.MetricsAddress = "127.0.0.1:9036"
+	if got := s.RelayConfig(nil).MetricsPort; got != "127.0.0.1:9036" {
+		t.Errorf("MetricsPort = %q, want the picked address", got)
+	}
+	s.Relay.MetricsPort = false
+	if got := s.RelayConfig(nil).MetricsPort; got != "" {
+		t.Errorf("MetricsPort = %q with metrics off", got)
+	}
+	data, err := s.Marshal()
+	if err != nil || strings.Contains(string(data), "9036") {
+		t.Errorf("the per-host MetricsAddress must not be saved:\n%s", data)
+	}
+	if !strings.Contains(string(data), "instance = \"\"") || !strings.Contains(string(data), "tuning = false") {
+		t.Errorf("Marshal lacks instance/tuning:\n%s", data)
 	}
 }

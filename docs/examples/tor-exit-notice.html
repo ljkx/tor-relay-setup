@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!--
+  Tor exit notice, served by tor itself on port 80 (DirPort 80 with
+  DirPortFrontPage). tor-relay-setup fills in the {{"{{"}} ... {{"}}"}} fields from
+  relay.toml; edit the rendered page next to your torrc if you need more.
+
+  The structure follows the sample notice that ships with tor
+  (contrib/operator-tools/tor-exit-notice.html, part of tor, distributed
+  under the 3-clause BSD license); the wording here is tor-relay-setup's own.
+  It is not legal advice.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>This is a Tor exit relay</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 44rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.55 system-ui, sans-serif; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; }
+  code { font-size: .95em; }
+  footer { margin-top: 3rem; font-size: .85rem; opacity: .75; }
+</style>
+</head>
+<body>
+<h1>This is a Tor exit relay</h1>
+
+<p>You are probably reading this because you saw a connection from this
+address in your logs. This server, <strong>{{.Nickname}}</strong>, is a relay
+of the <a href="https://www.torproject.org/">Tor network</a>, run by a
+volunteer. The traffic you saw did not start here: it was relayed on behalf
+of a Tor user.</p>
+
+<h2>What Tor is</h2>
+<p>Tor is free software and an open network that helps people keep their
+browsing private. Each connection passes through three relays chosen at
+random, and this exit relay is the last one: it only sees where the traffic
+goes, never who sent it. Journalists, activists, people in censored
+countries, companies, law enforcement and ordinary people use Tor every day
+to protect themselves.</p>
+
+<h2>What the operator can and cannot do</h2>
+<ul>
+  <li>This relay keeps no logs of the traffic it forwards. There is no way
+    to tell which Tor user made a particular connection, so seizing or
+    inspecting this server would not reveal it either.</li>
+  <li>The operator can only block destination addresses and ports for all
+    users at once. The exit policy of this relay is public and listed in
+    <a href="https://metrics.torproject.org/rs.html#search/{{.Nickname}}">Tor Metrics</a>.</li>
+  <li>You can check whether an address was a Tor exit at a given time with
+    <a href="https://metrics.torproject.org/exonerator.html">ExoneraTor</a>.</li>
+</ul>
+
+<h2>If you want to block Tor</h2>
+<p>Most problems are better solved by fixing the service itself (rate
+limits, CAPTCHAs, patching), because the same behaviour comes from the rest
+of the Internet too. If you still want to block Tor exits, the Tor Project
+publishes a list of current exit addresses:
+<a href="https://check.torproject.org/torbulkexitlist">check.torproject.org/torbulkexitlist</a>.</p>
+
+<h2>Legal background</h2>
+<p>Relay operators forward traffic without selecting or changing it, much
+like an Internet service provider. The Electronic Frontier Foundation's
+<a href="https://community.torproject.org/relay/community-resources/eff-tor-legal-faq/">Legal FAQ for Tor Relay Operators</a>
+explains the situation in the United States; the law where this server runs
+may differ.</p>
+
+<h2>Contact</h2>
+<p>For abuse reports or questions, write to
+{{if .Email}}<a href="mailto:{{.Email}}">{{.Email}}</a>{{else}}the operator ({{.Contact}}){{end}}.
+Please include the time (with time zone), the destination address and port,
+and why you are concerned.</p>
+
+<footer>Relay {{.Nickname}} · ContactInfo: {{.Contact}}</footer>
+</body>
+</html>

@@ -26,7 +26,12 @@ Set up and run a public **Tor relay** on Debian or Ubuntu from one small, signed
 - **The rest of the setup:** firewall rules (SSH is always allowed first), a local Unbound resolver for exit DNS, unattended upgrades, Nyx, and an optional local-only MetricsPort.
 - **Verification before and after:** every torrc is checked by `tor --verify-config` before it replaces the live file. After Tor starts, the tool checks the service, the listener, family-key warnings, and Tor's own reachability self-test, which it keeps waiting for in the background.
 - **A dashboard for existing relays:** run it again on a configured relay and you get health, live traffic from the MetricsPort, a month of Tor Metrics history, a live log, family management, settings, updates, and key backups. It refreshes itself.
-- **Fleets and monitoring:** apply one `relay.toml` to many servers over SSH as one family, and export health for Prometheus.
+- **Bridges for censored users:** obfs4 bridges and WebTunnel bridges (hidden behind an ordinary HTTPS site, with nginx and an optional certbot certificate), with a shareable bridge line.
+- **Exit tools:** an exit policy editor (Tor's reduced policy, web-only, default, or your own rules), an exit notice page served by tor, and abuse-reply templates.
+- **Identity keys and ContactInfo proofs:** move a relay's master key offline and renew its signing key, and generate the files that prove your relays' ContactInfo.
+- **Several relays per server:** add relays as Debian tor instances, with ports, MetricsPorts and the shared family key handled for you.
+- **Fleets:** describe all your relays in one `fleet.toml`. Apply it over SSH in parallel as one family, watch every relay in one dashboard with aggregate statistics, and roll out restarts or Tor updates one relay at a time.
+- **Monitoring and alerts:** overload warnings before Relay Search flags you, notifications through ntfy, webhooks, email or a command, Prometheus output, and a ready-made Grafana dashboard.
 
 ## Install
 
@@ -44,7 +49,7 @@ sudo bash install.sh
 **Debian package** (`amd64` or `arm64`):
 
 ```bash
-VERSION=v3.1.0
+VERSION=v3.2.0
 ARCH=$(dpkg --print-architecture)
 curl -fsSLO "https://github.com/ljkx/tor-relay-setup/releases/download/${VERSION}/tor-relay-setup_${VERSION#v}_${ARCH}.deb"
 gh attestation verify "tor-relay-setup_${VERSION#v}_${ARCH}.deb" -R ljkx/tor-relay-setup   # optional
@@ -93,24 +98,69 @@ sudo tor-relay-setup apply --config relay.toml          # shows the plan, asks o
 sudo tor-relay-setup apply --config relay.toml --yes    # unattended, plain output
 ```
 
-Or apply it to a whole fleet from your workstation. It uses your own `ssh`, so `~/.ssh/config`, keys, and `known_hosts` all apply:
+### Bridges
+
+Choose **Bridge** as the relay type to help people in censored countries reach Tor. Bridges are not listed in the public consensus. Users get their address, the **bridge line**, from Tor's distributors or from you.
+
+- **obfs4:** the classic obfuscated transport. It uses `obfs4proxy` (or `lyrebird` where Debian ships it), a separate public port, and optionally a port below 1024 such as 443. See [`bridge-obfs4.toml`](docs/examples/bridge-obfs4.toml).
+- **WebTunnel:** the bridge hides behind an ordinary HTTPS website on your domain. The tool installs the Tor Project's `webtunnel` package and nginx, with a secret path proxied to the bridge. The TLS certificate is either one you already have or a new one from certbot, which you confirm explicitly. See [`bridge-webtunnel.toml`](docs/examples/bridge-webtunnel.toml).
+
+The console's **Bridge line** view (`i`) shows the line to share, with the public address filled in, and links to the [reachability scan](https://bridges.torproject.org/scan/) and the bridge's status page. Tor Metrics only ever sees the bridge's hashed fingerprint. Bridges never join a relay family and run without Sandbox, because Tor refuses Sandbox with pluggable transports. The bridge line is shown in the terminal but left out of `status --json`: anyone who has it can use the bridge, and a censor can block it.
+
+### Exit relays
+
+The wizard and the console's **Exit policy** view (`x`) offer four policies:
+- Tor's built-in `ReducedExitPolicy`;
+- web only (80 and 443);
+- Tor's default policy;
+- your own `accept`/`reject` rules, validated and checked with `tor --verify-config` before anything is written.
+
+Optionally, tor itself serves an [exit notice page](docs/examples/tor-exit-notice.html) on port 80, explaining to anyone who looks up your IP address that it is a Tor exit. [`docs/examples/`](docs/examples) also has reply templates for copyright notices, other abuse complaints, and law-enforcement requests.
+
+### Identity keys and ContactInfo proofs
+
+- **Offline master key** (`keys`, console `k`): shows when the relay's signing certificate expires, and warns a week ahead if tor can't renew it itself. `keys offline` sets `OfflineMasterKey 1` and exports the master key for you to store elsewhere. Only after you type the start of the copy's SHA-256 does `keys offline --remove-master` delete it from the server. `keys renew` creates the next signing key from the master key, or installs one you made with `tor --keygen` on another machine.
+- **ContactInfo proof** (`proof`, console `c`): prints `.well-known/tor-relay/ed25519-family-id.txt` for the [CIISS](https://nusenu.github.io/ContactInfo-Information-Sharing-Specification/) `uri-familyid-ed25519` proof, to publish on the domain in your ContactInfo's `url:`. `proof --check` fetches the published file over HTTPS and confirms that it lists your relays.
+
+### Several relays on one server
+
+Big servers can carry several relays, up to the directory authorities' limit of 8 per IPv4 address. Press `n` in the console to add one, or set `relay.instance = "relay2"` in a config. Each extra relay is a Debian tor instance (`tor@relay2`, `/etc/tor/instances/relay2/torrc`). The tool picks free ports, gives each relay its own MetricsPort (9036 upwards), and installs the server's family key for it. With several relays, the console gets a relay switcher (`[` `]` or `1`–`9`) and an all-relays health line, and `status --all` reports every relay.
+
+For relays above about 100 Mbit/s, the System step offers optional **kernel tuning**: a wider ephemeral port range, a larger connection-tracking table, and an open-file limit check, each with its reason in the written file.
+
+### Fleets
+
+Describe your relays once in a [`fleet.toml`](docs/examples/fleet.toml). It names a base `relay.toml`, a nickname template such as `MyRelay{n}`, and one `[[host]]` per relay; any `relay.toml` table can be overridden per host. Everything is validated locally before the first SSH connection.
 
 ```bash
-tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2 --dry-run
-tor-relay-setup apply --config relay.toml --host root@relay1 --host admin@relay2 --keep-going
+tor-relay-setup apply --inventory fleet.toml --dry-run    # every change on every host
+tor-relay-setup apply --inventory fleet.toml --parallel 8 # family host first, then 8 servers at a time
+tor-relay-setup fleet                                      # the fleet dashboard
+tor-relay-setup fleet restart --yes                        # rolling restart, waiting until each relay is back
 ```
 
-Each host gets this binary and the config in a private temporary directory that is removed afterwards. With `family.mode = "generate"`, the first host creates the family key and every other host imports it, so the fleet is one family. The remote user must be root or have passwordless sudo.
+The tool uses your own `ssh`, so `~/.ssh/config`, keys, jump hosts, and `known_hosts` all apply, and connections are shared per host. The remote user must be root or have passwordless sudo. With `family.mode = "generate"`, the first relay creates the family key and every other relay imports it.
 
-### Monitoring
+The **fleet dashboard** probes every relay over SSH every 10 seconds and asks Tor Metrics about the whole fleet at once:
+- **Totals:** relays running, the fleet's share of the network's consensus weight, combined guard and exit probability, live combined throughput, and a month of combined traffic.
+- **A sortable, filterable table** with one row per relay, and a detail view for each.
+- **Needs attention:** unreachable hosts, relays out of the consensus, missing or mismatched family keys, Tor version drift, and flags lost since the last look.
+- **Rolling actions:** restart, reload, or update Tor on the relays in view, one at a time.
+
+`fleet status --format text|json|prometheus` gives the same data without the dashboard. Each host needs tor-relay-setup installed (`install.sh`) for the dashboard and rolling actions.
+
+### Monitoring and alerts
 
 ```bash
 tor-relay-setup status                       # human summary, exit code 1 when something needs attention
 tor-relay-setup status --json                # the same report as JSON, for scripts
 tor-relay-setup status --format prometheus   # tor_relay_setup_* gauges for node_exporter's textfile collector
+sudo tor-relay-setup alert install           # check every 5 minutes and notify on changes
 ```
 
-For Prometheus, write the output to `tor_relay.prom.tmp` in the textfile directory from a timer, then `mv` it into place. The relay's own MetricsPort (`127.0.0.1:9035`) exposes Tor's detailed counters.
+`alert` notifies through ntfy, webhooks (including Slack-compatible ones), email via `sendmail`, or any command. It reports when the service stops, the ORPort becomes unreachable, a family key goes missing, the relay drops out of the consensus or loses a flag, Tor's overload signals fire, the accounting budget will run out early, a signing certificate is about to expire, or a bridge transport stops. It notifies when a problem appears, reminds you daily while it lasts, and tells you when it is resolved. Configure it in `/etc/tor-relay-setup/alerts.toml` ([example](docs/monitoring/alerts.toml)), and try it with `alert test`.
+
+[`docs/monitoring/`](docs/monitoring/README.md) has the textfile-collector timer, safe ways to scrape Tor's MetricsPort, Prometheus alerting rules, and a [Grafana dashboard](docs/monitoring/grafana-dashboard.json).
 
 ## The operator console
 
@@ -128,13 +178,19 @@ The dashboard keeps itself current:
 | --- | --- | --- |
 | `r` | Refresh | Re-checks everything now, including Tor Metrics; the footer shows when the data was last updated |
 | `l` | Live logs | Follows the Tor journal in place, with self-test and warning lines highlighted |
+| `i` | Bridge line | Bridges only: the line to share, a copy key, reachability and status links |
 | `f` | Relay family | FamilyId status, create or rotate a key, import, share instructions, remove, legacy MyFamily cleanup |
+| `x` | Exit policy | Exits only: reduced, web, default, or custom rules; IPv6 exit; the exit notice page |
 | `e` | Edit settings | Nickname, ContactInfo, bandwidth, MetricsPort, Sandbox. Verified by tor before anything is written. |
+| `k` | Identity keys | Signing certificate expiry, moving the master key offline, renewing the signing key |
+| `c` | ContactInfo proof | The proof file to publish on your website, and a check of the published copy |
 | `s` / `o` | Restart / Reload Tor | Restarts and verifies the service, or reloads after checking the torrc |
 | `p` | Stop / start Tor | Takes the relay offline (with confirmation) or brings it back |
 | `u` | Update Tor | Refreshes apt and upgrades tor from the Tor Project repository, with progress |
 | `b` | Back up keys | Writes a root-only archive of the identity and family keys |
 | `w` | Reconfigure | Reopens the full wizard, pre-filled from the current torrc, keeping its family |
+| `n` | Add a relay | Sets up another relay on this server as a tor instance, with free ports and the server's family key |
+| `[` / `]`, `1`–`9` | Switch relay | With several relays on the server, selects the relay every card and action works on |
 
 ## Requirements
 
@@ -142,7 +198,7 @@ The dashboard keeps itself current:
 | --- | --- |
 | **OS** | Debian 12 `bookworm`, Debian 13 `trixie`, Ubuntu 22.04 `jammy`, Ubuntu 24.04 `noble`, Ubuntu 26.04 `resolute` (all tested in CI). Other codenames work once the [Tor apt repository](https://deb.torproject.org/torproject.org/dists/) publishes them. |
 | **CPU** | `amd64` or `arm64`, the architectures the Tor repository builds |
-| **Init** | systemd (`tor@default.service`) |
+| **Init** | systemd (`tor@default.service`, and `tor@NAME.service` for extra relays) |
 | **Network** | A public, static IPv4 address; IPv6 is optional. Inbound TCP to the ORPort must be open, including in your provider's cloud firewall. |
 | **Relay capacity** | At least 10 Mbit/s each way (16 Mbit/s or more recommended), and at least 100 GB/month in each direction. Memory: 512 MiB, 1 GiB above 40 Mbit/s, 1.5 GiB for exits. See the [Tor relay requirements](https://community.torproject.org/relay/relays-requirements/). |
 
@@ -179,12 +235,18 @@ Nothing changes before you confirm the review screen. Every replaced file is fir
 | --- | --- |
 | `/etc/apt/sources.list.d/tor.sources`, `/usr/share/keyrings/deb.torproject.org-keyring.gpg` | always |
 | packages `tor`, `deb.torproject.org-keyring` (+ `nyx`, `unbound`, `ufw`, `unattended-upgrades`, `apt-listchanges` as chosen) | one apt transaction |
-| `/etc/tor/torrc` | always, after `tor --verify-config` accepts the new version |
-| `/var/lib/tor/keys/<name>.secret_family_key` | creating or importing a family; existing keys are never overwritten |
+| `/etc/tor/torrc`, or `/etc/tor/instances/NAME/torrc` for an extra relay | always, after `tor --verify-config` accepts the new version |
+| a tor instance (`tor-instance-create NAME`: user `_tor-NAME`, `/var/lib/tor-instances/NAME`, `tor@NAME`) | extra relays on one server |
+| `<key directory>/<name>.secret_family_key` | creating or importing a family; existing keys are never overwritten |
 | `/etc/apt/apt.conf.d/52tor-relay-unattended-upgrades`, `20auto-upgrades` | automatic updates |
 | firewall rules | when chosen; SSH ports are allowed before UFW is enabled |
 | `/etc/resolv.conf` | exits using Unbound; rolled back automatically if DNS stops resolving |
 | `/etc/hostname`, `/etc/hosts` | only if you rename the host |
+| `/etc/sysctl.d/60-tor-relay.conf`, a conntrack udev rule, a `LimitNOFILE` drop-in | only with `system.tuning` |
+| `obfs4proxy`/`lyrebird` or `webtunnel`, nginx site `tor-webtunnel-<instance>`, certbot certificate | bridges, as chosen; nginx changes pass `nginx -t` first |
+| `setcap` on the transport, a `NoNewPrivileges=no` drop-in, a managed block in `/etc/apparmor.d/local/system_tor` | an obfs4 port below 1024, or WebTunnel |
+| `tor-exit-notice.html` next to the torrc | exits with the exit notice page; an existing page is kept |
+| `/etc/systemd/system/tor-relay-setup-alert.{service,timer}`, `/etc/tor-relay-setup/alerts.toml` (yours) | `alert install` |
 | `/var/lib/tor-relay-setup/state.json`, `/var/log/tor-relay-setup/*.log` | the tool's own state, and a log of each apply |
 
 There is no telemetry. The tool only contacts:
@@ -199,18 +261,26 @@ There is no telemetry. The tool only contacts:
 tor-relay-setup [flags]                   console on a configured relay, otherwise the setup wizard
 tor-relay-setup setup [flags]             run the setup wizard
 tor-relay-setup apply --config FILE       apply a saved relay.toml (--yes skips the confirmation)
-tor-relay-setup apply --config FILE --host [user@]HOST [--host ...] [--keep-going]
-                                          apply it to remote relays over ssh, one after another
+tor-relay-setup apply --inventory FILE [--parallel N] [--only LIST] [--keep-going]
+                                          apply a fleet inventory over ssh, family host first
 tor-relay-setup console                   open the operator console
-tor-relay-setup status [--format text|json|prometheus]
+tor-relay-setup status [--all] [--format text|json|prometheus]
                                           relay health; text and json exit 1 when something needs attention
+tor-relay-setup fleet [status|restart|reload|update-tor]
+                                          fleet dashboard, fleet status, rolling actions
+tor-relay-setup tor restart|reload|update restart and verify, reload, or upgrade tor on this server
+tor-relay-setup alert run|test|install|uninstall
+                                          notifications about problems; install adds a systemd timer
+tor-relay-setup proof [--all] [--check]   ContactInfo proof files for your website
+tor-relay-setup keys status|offline|renew signing key expiry, offline master key, renewal
 tor-relay-setup self-update [--check]     install the newest verified release; --check exits 10 if one exists
-tor-relay-setup uninstall [--yes]         remove this tool's state, logs and binary (never Tor or its keys)
+tor-relay-setup uninstall [--yes]         remove this tool's state, logs, alert timer and binary (never Tor or its keys)
 tor-relay-setup version
 
---dry-run   show every command and file change without making it (no root needed)
---plain     line-by-line prompts and output; also used automatically without a terminal
-            (screen-reader friendly)
+--dry-run        show every command and file change without making it (no root needed)
+--plain          line-by-line prompts and output; also used automatically without a terminal
+                 (screen-reader friendly)
+--instance NAME  work on one tor instance of this server ("default" is /etc/tor/torrc)
 ```
 
 `NO_COLOR=1` disables colour. The interface adapts to light and dark terminals. `tor-relay-setup --help` lists every flag and exit code.

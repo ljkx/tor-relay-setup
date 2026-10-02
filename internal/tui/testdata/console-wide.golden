@@ -7,17 +7,17 @@
 │  l  Live logs                  │ │ Mode         guard / middle                     │ │ Listener      ✓ TCP 9001                        │
 │  f  Relay family               │ │ ORPort       9001 (IPv4 + IPv6)                 │ │ Reachability  ✓ reachable (IPv4 + IPv6)         │
 │  e  Edit settings              │ ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
-│  s  Restart Tor                │ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
-│  o  Reload Tor                 │ │ Family                                          │ │ Traffic                                         │
-│  p  Stop / start Tor           │ │ ✓  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  │ │ Limit        1640 KBytes (burst 8200 KBytes)    │
-│  u  Update Tor                 │ │                                                 │ │ Accounting   8381 GBytes per month, rule sum    │
-│  b  Back up keys               │ │                                                 │ │ MetricsPort  127.0.0.1:9035                     │
-│  w  Reconfigure                │ │                                                 │ │ Live         ↓ 148.0 Mbit/s  ↑ 140.6 Mbit/s     │
-│  q  Quit                       │ │                                                 │ │              ▁▂▂▂▃▃▃▄▄▅▅▅▆▆▆▇▇██ 38s            │
-╰────────────────────────────────╯ │                                                 │ │ Connections  1480 OR                            │
-                                   │                                                 │ │ Sandbox      yes                                │
-                                   ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
-                                   ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  k  Identity keys              │ ╭─────────────────────────────────────────────────╮ ╭─────────────────────────────────────────────────╮
+│  c  ContactInfo proof          │ │ Family                                          │ │ Traffic                                         │
+│  s  Restart Tor                │ │ ✓  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  │ │ Limit        1640 KBytes (burst 8200 KBytes)    │
+│  o  Reload Tor                 │ │                                                 │ │ Accounting   8381 GBytes per month, rule sum    │
+│  p  Stop / start Tor           │ │                                                 │ │ MetricsPort  127.0.0.1:9035                     │
+│  u  Update Tor                 │ │                                                 │ │ Live         ↓ 148.0 Mbit/s  ↑ 140.6 Mbit/s     │
+│  b  Back up keys               │ │                                                 │ │              ▁▂▂▂▃▃▃▄▄▅▅▅▆▆▆▇▇██ 38s            │
+│  w  Reconfigure                │ │                                                 │ │ Connections  1480 OR                            │
+│  n  Add a relay                │ │                                                 │ │ Sandbox      yes                                │
+│  q  Quit                       │ ╰─────────────────────────────────────────────────╯ ╰─────────────────────────────────────────────────╯
+╰────────────────────────────────╯ ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
                                    │ Tor Metrics                                                                                         │
                                    │ Status      ✓ running                                                                               │
                                    │ Flags       Fast Guard Running Stable Valid                                                         │

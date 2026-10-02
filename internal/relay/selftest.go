@@ -10,6 +10,9 @@ type SelfTest struct {
 	IPv4   bool // the IPv4 ORPort (or an unaddressed legacy notice) was confirmed
 	IPv6   bool // the bracketed IPv6 ORPort was confirmed
 	Failed bool // Tor gave up confirming reachability
+	// Address is the IPv4 address of the last success notice that named
+	// one: the relay's public address as the network sees it.
+	Address string
 }
 
 var (
@@ -34,6 +37,9 @@ func ParseSelfTest(log string) SelfTest {
 				st.IPv6 = true
 			} else {
 				st.IPv4 = true
+				if host, _, ok := strings.Cut(strings.TrimSpace(m[1]), ":"); ok {
+					st.Address = host
+				}
 			}
 		}
 		if selfTestFailRe.MatchString(line) {

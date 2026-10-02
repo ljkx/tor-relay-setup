@@ -15,6 +15,7 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/config"
 	"github.com/ljkx/tor-relay-setup/internal/host"
 	"github.com/ljkx/tor-relay-setup/internal/plan"
+	"github.com/ljkx/tor-relay-setup/internal/relay"
 	"github.com/ljkx/tor-relay-setup/internal/service"
 	"github.com/ljkx/tor-relay-setup/internal/system"
 )
@@ -214,7 +215,12 @@ func (ap *apply) update(a *App, msg tea.Msg) (screen, tea.Cmd) {
 			ap.logFile = nil
 		}
 		if msg.err == nil && !a.opt.DryRun {
-			ap.finger = readFingerprint(a.opt.Host)
+			ap.finger = readFingerprint(a.opt.Host, ap.setup.Instance())
+			if ap.setup.IsWebTunnel() {
+				// AssumeReachable 1: tor runs no ORPort self-test.
+				ap.reachDone = true
+				return ap, nil
+			}
 			return ap, ap.waitReachable(a)
 		}
 		return ap, nil
@@ -281,7 +287,7 @@ func (ap *apply) waitReachable(a *App) tea.Cmd {
 			prev()
 		}
 	}
-	tor := service.Tor{Host: a.opt.Host, Unit: service.DefaultUnit}
+	tor := service.Tor{Host: a.opt.Host, Unit: ap.setup.Instance().Unit}
 	since, wantV6 := ap.env.RestartedAt, ap.setup.Relay.IPv6 != ""
 	return tea.Batch(func() tea.Msg {
 		st, err := tor.WaitReachable(ctx, since, 5*time.Second, wantV6)
@@ -417,12 +423,17 @@ func (ap *apply) resultCard(a *App, w int) string {
 	if ap.setup.Family.Mode == "generate" {
 		body += "\n" + t.Subtle.Render("Copy the family key to your other relays: console → Relay family → Share.")
 	}
+	if ap.setup.IsBridge() {
+		body += "\n" + t.Subtle.Render("Share the bridge line from the console → Bridge line (y copies it).")
+	}
 	return panel(t, "Your relay", body, w, true)
 }
 
 func (ap *apply) reachText(a *App) string {
 	t := a.theme
 	switch {
+	case ap.setup.IsWebTunnel():
+		return t.Subtle.Render("WebTunnel runs no self-test: try the bridge line in Tor Browser")
 	case ap.reachDone && ap.reach.IPv4:
 		s := t.GoodText.Render(iconDone + " ORPort reachable from outside")
 		if ap.reach.IPv6 {
@@ -463,8 +474,14 @@ func (ap *apply) keys(a *App) []string {
 	return []string{"enter", "finish", "l", "output"}
 }
 
-func readFingerprint(h host.Host) string {
-	data, err := h.ReadFile("/var/lib/tor/fingerprint")
+// readFingerprint reads the relay fingerprint from inst's DataDirectory.
+func readFingerprint(h host.Host, inst relay.Instance) string {
+	inst = inst.OrDefault()
+	dataDir := inst.DataDir
+	if torrc, err := h.ReadFile(inst.TorrcPath); err == nil {
+		dataDir = relay.ParseDocument(torrc).DataDirectoryOr(dataDir)
+	}
+	data, err := h.ReadFile(strings.TrimRight(dataDir, "/") + "/fingerprint")
 	if err != nil {
 		return ""
 	}

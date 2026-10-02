@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,8 +22,9 @@ import (
 	"github.com/ljkx/tor-relay-setup/internal/torproject"
 )
 
-// TorUser owns Tor's data and key directories on Debian and Ubuntu.
-const TorUser = "debian-tor"
+// TorUser owns the default instance's data and key directories on Debian
+// and Ubuntu; a named instance uses relay.Instance.User (_tor-NAME).
+const TorUser = relay.DefaultUser
 
 const resolvConf = "/etc/resolv.conf"
 
@@ -37,6 +39,12 @@ func Build(s config.Setup, f system.Facts) []Step {
 		updateStep(),
 		packagesStep(s, f),
 	)
+	if inst := s.Instance(); !inst.IsDefault() {
+		steps = append(steps, instanceStep(inst))
+	}
+	if s.System.Tuning {
+		steps = append(steps, tuningStep(s))
+	}
 	if s.Family.Mode == "generate" || s.Family.Mode == "import" {
 		steps = append(steps, familyStep(s))
 	}
@@ -46,8 +54,22 @@ func Build(s config.Setup, f system.Facts) []Step {
 	if s.System.UnattendedUpgrades {
 		steps = append(steps, unattendedStep(f))
 	}
-	steps = append(steps, torrcStep())
-	if fw := firewallPlan(s, f); fw.enabled {
+	if bridgeStepNeeded(s) {
+		steps = append(steps, bridgeStep(s))
+	}
+	fw := firewallPlan(s, f)
+	if s.ManagedNginx() {
+		// certbot's HTTP-01 challenge needs port 80 open before it runs.
+		if fw.enabled {
+			steps = append(steps, firewallStep(s, f, fw))
+		}
+		steps = append(steps, webTunnelStep(s))
+	}
+	if s.IsExit() && s.Exit.Notice {
+		steps = append(steps, exitNoticeStep(s))
+	}
+	steps = append(steps, torrcStep(s))
+	if fw.enabled && !s.ManagedNginx() {
 		steps = append(steps, firewallStep(s, f, fw))
 	}
 	steps = append(steps, serviceStep(s), stateStep())
@@ -63,6 +85,7 @@ func Packages(s config.Setup, f system.Facts) []string {
 	if s.IsExit() && s.Exit.Unbound {
 		pkgs = append(pkgs, "unbound")
 	}
+	pkgs = append(pkgs, bridgePackages(s)...)
 	if s.System.UnattendedUpgrades {
 		pkgs = append(pkgs, "unattended-upgrades", "apt-listchanges")
 	}
@@ -87,15 +110,44 @@ func preflightStep(s config.Setup, f system.Facts) Step {
 			if e.Facts.DiskFreeMiB > 0 && e.Facts.DiskFreeMiB < 512 {
 				return fmt.Errorf("only %d MiB free under /var; apt needs at least 512 MiB (check df -h)", e.Facts.DiskFreeMiB)
 			}
-			if s.Family.Mode == "generate" {
-				key := family.KeyDirectory("", "", "/var/lib/tor") + "/" + s.Family.KeyName + ".secret_family_key"
-				if _, err := e.Host.Stat(key); err == nil {
-					return fmt.Errorf("a family key named %q already exists (%s); choose another name or import it instead", s.Family.KeyName, key)
+			// Other relays on this server: ports, family and the per-IP limit.
+			others := OtherInstances(e.Host, e.instance())
+			e.Setup.Relay.MetricsAddress = ResolveMetricsAddress(e.Host, e.Setup)
+			if e.Setup.IsWebTunnel() {
+				if resolveWebTunnelPath(e.Host, &e.Setup) {
+					r.Note(Info, "Generated the secret WebTunnel path "+e.Setup.Bridge.Path+"; torrc keeps it (or pin it with path = \""+e.Setup.Bridge.Path+"\" under [bridge] in relay.toml)")
+				}
+				if e.Setup.Bridge.LocalPort == 0 {
+					e.Setup.Bridge.LocalPort = relay.NextFreePort(relay.DefaultWebTunnelPort, usedPorts(others))
 				}
 			}
-			need := system.RequiredRAMMiB(s.IsExit())
+			if err := Conflicts(e.Setup, others); err != nil {
+				return err
+			}
+			if offlineKeyGone(e.Host, e.instance()) && !e.Setup.Relay.OfflineMasterKey {
+				e.Setup.Relay.OfflineMasterKey = true
+				r.Note(Warn, "The ed25519 master key is not on this server: keeping OfflineMasterKey 1 so tor never creates a new identity")
+			}
+			for _, w := range e.Setup.Warnings() {
+				r.Note(Warn, w)
+			}
+			shared, err := sharedFamily(e.Host, e.Setup, others)
+			if err != nil {
+				return err
+			}
+			if err := checkOwnFamilyKey(e.Host, e.Setup, shared); err != nil {
+				return err
+			}
+			e.SharedFamily = shared
+			if w := RelaysPerIPv4Warning(len(others) + 1); w != "" {
+				r.Note(Warn, w)
+			}
+			if len(others) > 0 {
+				r.Note(Info, fmt.Sprintf("%d other relay instance(s) on this server; configuring %s", len(others), e.instance().Unit))
+			}
+			need := system.RequiredRAMMiB(s.IsExit()) * (len(others) + 1)
 			if e.Facts.MemTotalMiB > 0 && e.Facts.MemTotalMiB < need {
-				r.Note(Warn, fmt.Sprintf("%d MiB RAM is below Tor's recommended %d MiB for this relay type", e.Facts.MemTotalMiB, need))
+				r.Note(Warn, fmt.Sprintf("%d MiB RAM is below Tor's recommended %d MiB for %d relay(s) of this type", e.Facts.MemTotalMiB, need, len(others)+1))
 			}
 			r.Progress(50, "Checking the Tor Project repository for "+f.Codename)
 			ok, err := torproject.SuiteAvailable(ctx, e.HTTP, f.Codename)
@@ -206,10 +258,14 @@ func updateStep() Step {
 
 func packagesStep(s config.Setup, f system.Facts) Step {
 	pkgs := Packages(s, f)
+	change := "Install packages in one apt transaction: " + strings.Join(pkgs, " ")
+	if slices.Contains(pkgs, "obfs4proxy") {
+		change += " (lyrebird instead of obfs4proxy where apt offers it)"
+	}
 	return Step{
 		ID:      "packages",
 		Title:   "Install " + strings.Join(pkgs, ", "),
-		Changes: []string{"Install packages in one apt transaction: " + strings.Join(pkgs, " ")},
+		Changes: []string{change},
 		Weight:  30,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
 			c := apt.Client{Host: e.Host}
@@ -225,6 +281,16 @@ func packagesStep(s config.Setup, f system.Facts) Step {
 			want := Packages(e.Setup, e.Facts)
 			install := make([]string, 0, len(want))
 			for _, p := range want {
+				if p == "obfs4proxy" {
+					// lyrebird is obfs4proxy's successor; Debian packages it
+					// from forky on. Both serve obfs4 the same way.
+					p = obfs4Package(ctx, c)
+					e.Setup.Bridge.Plugin = relay.Obfs4ProxyPath
+					if p == "lyrebird" {
+						e.Setup.Bridge.Plugin = relay.LyrebirdPath
+					}
+					r.Note(Info, "obfs4 transport: "+p+" ("+e.Setup.Bridge.Plugin+")")
+				}
 				if p == "deb.torproject.org-keyring" && !e.Host.DryRun() {
 					if ok, _ := c.CandidateAvailable(ctx, p); !ok {
 						r.Note(Warn, "deb.torproject.org-keyring is not published for "+e.Facts.Codename+"; keeping the verified key file")
@@ -267,12 +333,28 @@ func packagesStep(s config.Setup, f system.Facts) Step {
 	}
 }
 
+// obfs4Package picks lyrebird when it is installed or apt has a candidate
+// for it, else obfs4proxy.
+func obfs4Package(ctx context.Context, c apt.Client) string {
+	if ok, _ := c.Installed(ctx, "lyrebird"); ok {
+		return "lyrebird"
+	}
+	if ok, _ := c.CandidateAvailable(ctx, "lyrebird"); ok {
+		return "lyrebird"
+	}
+	return "obfs4proxy"
+}
+
 func familyStep(s config.Setup) Step {
+	inst := s.Instance()
 	title := "Create relay family key " + s.Family.KeyName
-	change := "Generate a family key with tor --keygen-family and install it for " + TorUser
+	change := "Generate a family key with tor --keygen-family and install it in " + inst.KeyDir + " for " + inst.User
+	if !inst.IsDefault() {
+		change += " (another relay on this server that already has the key shares it instead)"
+	}
 	if s.Family.Mode == "import" {
 		title = "Import relay family key"
-		change = "Install family key " + s.Family.ImportKey + " for " + TorUser
+		change = "Install family key " + s.Family.ImportKey + " in " + inst.KeyDir + " for " + inst.User
 	}
 	return Step{
 		ID:      "family",
@@ -280,7 +362,8 @@ func familyStep(s config.Setup) Step {
 		Changes: []string{change},
 		Weight:  2,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
-			dir := family.KeyDirectory("", "", "/var/lib/tor")
+			inst := e.instance()
+			dir := inst.KeyDir
 			var (
 				name   string
 				secret []byte
@@ -288,6 +371,16 @@ func familyStep(s config.Setup) Step {
 			)
 			switch e.Setup.Family.Mode {
 			case "generate":
+				if sh := e.SharedFamily; sh != nil {
+					// All relays on one server share one family key.
+					data, err := e.Host.ReadFile(sh.Key.Path)
+					if err != nil {
+						return fmt.Errorf("read family key of tor instance %s: %w", sh.Instance, err)
+					}
+					name, secret, id = sh.Key.Name, data, sh.Key.ID
+					r.Note(Info, "Sharing family key "+name+" of tor instance "+sh.Instance+": all relays on this server are one family")
+					break
+				}
 				name = e.Setup.Family.KeyName
 				work, err := os.MkdirTemp("", "tor-family-")
 				if err != nil {
@@ -317,7 +410,7 @@ func familyStep(s config.Setup) Step {
 					return errors.New("no FamilyId: copy NAME.public_family_id next to the key, or set family.family_id")
 				}
 			}
-			if err := family.Install(e.Host, dir, name, secret, id, TorUser); err != nil {
+			if err := family.Install(e.Host, dir, name, secret, id, inst.User); err != nil {
 				return err
 			}
 			e.FamilyID = id
@@ -407,16 +500,23 @@ func unattendedStep(f system.Facts) Step {
 	}
 }
 
-func torrcStep() Step {
+func torrcStep(s config.Setup) Step {
 	return Step{
 		ID:      "torrc",
 		Title:   "Write and verify torrc",
-		Changes: []string{"Back up and replace /etc/tor/torrc after tor --verify-config accepts the new version"},
+		Changes: []string{"Back up and replace " + s.Instance().TorrcPath + " after tor --verify-config accepts the new version"},
 		Weight:  3,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
 			var ids []string
 			if e.FamilyID != "" {
 				ids = []string{e.FamilyID}
+			}
+			inst := e.instance()
+			if e.Setup.Relay.MetricsPort && e.Setup.Relay.MetricsAddress == "" {
+				e.Setup.Relay.MetricsAddress = ResolveMetricsAddress(e.Host, e.Setup)
+			}
+			if e.Setup.IsWebTunnel() && e.Setup.Bridge.Path == "" {
+				return errNoPath
 			}
 			cfg := e.Setup.RelayConfig(ids)
 			if err := cfg.Validate(); err != nil {
@@ -437,15 +537,19 @@ func torrcStep() Step {
 				return err
 			}
 			r.Progress(40, "tor --verify-config")
-			switch err := relay.Verify(ctx, e.Host, candidate.Name()); {
+			_, statErr := e.Host.Stat(inst.TorrcPath)
+			switch err := relay.VerifyInstance(ctx, e.Host, inst, candidate.Name()); {
 			case errors.Is(err, relay.ErrTorMissing) && e.Host.DryRun():
 				r.Note(Info, "tor --verify-config runs once tor is installed")
+			case err != nil && e.Host.DryRun() && !inst.IsDefault() && statErr != nil:
+				// tor rejects the defaults' User _tor-NAME until it exists.
+				r.Note(Info, "tor --verify-config runs once "+relay.InstanceCreateCommand+" has created instance "+inst.Name)
 			case err != nil:
 				return fmt.Errorf("tor rejected the generated torrc: %w", err)
 			default:
 				r.Note(Success, "tor --verify-config accepted the new torrc")
 			}
-			ch, err := e.Host.WriteFile(e.TorrcPath, data, host.FileOptions{Mode: 0o644, Backup: true})
+			ch, err := e.Host.WriteFile(inst.TorrcPath, data, host.FileOptions{Mode: 0o644, Backup: true})
 			if err != nil {
 				return err
 			}
@@ -481,14 +585,24 @@ func firewallPlan(s config.Setup, f system.Facts) firewallChoice {
 }
 
 func firewallStep(s config.Setup, f system.Facts, choice firewallChoice) Step {
-	cmds := system.FirewallCommands(choice.fw, s.Relay.ORPort, f.SSHPorts, s.System.EnableUFW, choice.installUFW)
+	var ports []system.Port
+	var numbers []string
+	for _, p := range s.PublicPorts() {
+		ports = append(ports, system.Port{Number: p.Number, Label: p.Label})
+		numbers = append(numbers, strconv.Itoa(p.Number))
+	}
+	cmds := system.FirewallCommandsFor(choice.fw, ports, f.SSHPorts, s.System.EnableUFW, choice.installUFW)
 	changes := make([]string, 0, len(cmds))
 	for _, c := range cmds {
 		changes = append(changes, c.String())
 	}
+	title := "Open ORPort " + strconv.Itoa(s.Relay.ORPort) + " in " + choice.fw.Kind
+	if len(ports) > 1 || s.IsWebTunnel() {
+		title = "Open TCP " + strings.Join(numbers, ", ") + " in " + choice.fw.Kind
+	}
 	return Step{
 		ID:      "firewall",
-		Title:   "Open ORPort " + strconv.Itoa(s.Relay.ORPort) + " in " + choice.fw.Kind,
+		Title:   title,
 		Changes: changes,
 		Weight:  2,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
@@ -497,7 +611,7 @@ func firewallStep(s config.Setup, f system.Facts, choice firewallChoice) Step {
 					return err
 				}
 			}
-			r.Note(Info, "Open TCP "+strconv.Itoa(e.Setup.Relay.ORPort)+" in your provider's cloud firewall too")
+			r.Note(Info, "Open TCP "+strings.Join(numbers, ", ")+" in your provider's cloud firewall too")
 			return nil
 		},
 	}
@@ -507,10 +621,11 @@ func serviceStep(s config.Setup) Step {
 	return Step{
 		ID:      "service",
 		Title:   "Start Tor",
-		Changes: []string{"Enable and restart " + service.DefaultUnit},
+		Changes: []string{"Enable and restart " + s.Instance().Unit},
 		Weight:  6,
 		Run: func(ctx context.Context, e *Env, r Reporter) error {
-			tor := service.Tor{Host: e.Host, Unit: service.DefaultUnit}
+			unit := e.instance().Unit
+			tor := service.Tor{Host: e.Host, Unit: unit}
 			if err := tor.Enable(ctx); err != nil {
 				return err
 			}
@@ -521,18 +636,36 @@ func serviceStep(s config.Setup) Step {
 			if e.Host.DryRun() {
 				return nil
 			}
-			r.Progress(40, "Waiting for "+service.DefaultUnit)
+			r.Progress(40, "Waiting for "+unit)
 			if !waitFor(ctx, 15*time.Second, func() bool { return tor.Active(ctx) }) {
-				return errors.New(service.DefaultUnit + " is not active; check journalctl -u " + service.DefaultUnit + " -n 100")
+				return errors.New(unit + " is not active; check journalctl -u " + unit + " -n 100")
 			}
-			r.Progress(70, "Waiting for the ORPort listener")
-			if waitFor(ctx, 20*time.Second, func() bool {
-				v4, v6, _ := system.Listening(e.Host, e.Setup.Relay.ORPort)
-				return v4 || v6
-			}) {
-				r.Note(Success, fmt.Sprintf("Tor is listening on TCP %d", e.Setup.Relay.ORPort))
-			} else {
-				r.Note(Warn, fmt.Sprintf("no listener on TCP %d yet; check the Tor log", e.Setup.Relay.ORPort))
+			type listener struct {
+				port int
+				what string
+			}
+			var wait []listener
+			switch s := e.Setup; {
+			case s.IsWebTunnel():
+				wait = []listener{{s.WebTunnelPort(), "the webtunnel transport"}}
+			case s.IsBridge():
+				wait = []listener{{s.Relay.ORPort, "Tor"}, {s.Bridge.Obfs4Port, "the obfs4 transport"}}
+			default:
+				wait = []listener{{s.Relay.ORPort, "Tor"}}
+			}
+			r.Progress(70, "Waiting for the listeners")
+			for _, l := range wait {
+				if waitFor(ctx, 20*time.Second, func() bool {
+					v4, v6, _ := system.Listening(e.Host, l.port)
+					return v4 || v6
+				}) {
+					r.Note(Success, fmt.Sprintf("%s is listening on TCP %d", l.what, l.port))
+				} else {
+					r.Note(Warn, fmt.Sprintf("no listener on TCP %d yet; check the Tor log", l.port))
+				}
+			}
+			if e.Setup.IsBridge() {
+				r.Note(Info, "The bridge line appears in the console (Bridge line) once tor has started the transport; Tor Metrics lists new bridges after about three hours")
 			}
 			if warnings, _ := tor.FamilyWarnings(ctx, e.RestartedAt); len(warnings) > 0 {
 				for _, w := range warnings {
@@ -567,6 +700,17 @@ type State struct {
 	AppliedAt   time.Time `json:"applied_at"`
 	NewPackages []string  `json:"new_packages,omitempty"`
 	FamilyID    string    `json:"family_id,omitempty"`
+	Instance    string    `json:"instance,omitempty"`
+}
+
+// StateFile is where stateStep records a run for inst: state.json for the
+// default instance, state-NAME.json for a named one, so applying a second
+// instance does not overwrite the first one's record.
+func StateFile(stateDir string, inst relay.Instance) string {
+	if inst.IsDefault() {
+		return filepath.Join(stateDir, "state.json")
+	}
+	return filepath.Join(stateDir, "state-"+inst.Name+".json")
 }
 
 func stateStep() Step {
@@ -583,11 +727,12 @@ func stateStep() Step {
 				AppliedAt:   e.Now().UTC(),
 				NewPackages: e.NewPackages,
 				FamilyID:    e.FamilyID,
+				Instance:    instanceLabel(e.instance()),
 			}, "", "  ")
 			if err != nil {
 				return err
 			}
-			_, err = e.Host.WriteFile(filepath.Join(e.StateDir, "state.json"), append(data, '\n'), host.FileOptions{Mode: 0o600})
+			_, err = e.Host.WriteFile(StateFile(e.StateDir, e.instance()), append(data, '\n'), host.FileOptions{Mode: 0o600})
 			return err
 		},
 	}

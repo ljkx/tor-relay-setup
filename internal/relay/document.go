@@ -194,27 +194,56 @@ func (d *Document) ORPorts() []string { return d.GetAll("ORPort") }
 // FirstORPort returns the port number of the first ORPort that names one
 // ("9001", "0.0.0.0:9001", "[::]:443 NoListen"), or 0 if none does.
 func (d *Document) FirstORPort() int {
+	if ports := d.ORPortNumbers(); len(ports) > 0 {
+		return ports[0]
+	}
+	return 0
+}
+
+// ORPortNumbers returns the distinct port numbers of every ORPort line, in
+// order, including NoListen and NoAdvertise ports.
+func (d *Document) ORPortNumbers() []int {
+	var out []int
 	for _, v := range d.ORPorts() {
-		f := strings.Fields(v)
-		if len(f) == 0 {
-			continue
+		if n := PortNumber(v); n > 0 && !slices.Contains(out, n) {
+			out = append(out, n)
 		}
-		p := f[0]
-		if i := strings.LastIndex(p, "]:"); i >= 0 {
-			p = p[i+2:]
-		} else if i := strings.LastIndexByte(p, ':'); i >= 0 {
-			p = p[i+1:]
-		}
-		if n, err := strconv.Atoi(p); err == nil && ValidPort(n) {
-			return n
-		}
+	}
+	return out
+}
+
+// MetricsPortNumber returns the port of the MetricsPort line, or 0.
+func (d *Document) MetricsPortNumber() int {
+	v, _ := d.Get("MetricsPort")
+	return PortNumber(v)
+}
+
+// PortNumber returns the port of a torrc port value ("9001",
+// "0.0.0.0:9001", "[::]:443 NoListen"), or 0 if it names none.
+func PortNumber(v string) int {
+	f := strings.Fields(v)
+	if len(f) == 0 {
+		return 0
+	}
+	p := f[0]
+	if i := strings.LastIndex(p, "]:"); i >= 0 {
+		p = p[i+2:]
+	} else if i := strings.LastIndexByte(p, ':'); i >= 0 {
+		p = p[i+1:]
+	}
+	if n, err := strconv.Atoi(p); err == nil && ValidPort(n) {
+		return n
 	}
 	return 0
 }
 
 // DataDirectory returns the configured DataDirectory, or Tor's Debian
 // default /var/lib/tor.
-func (d *Document) DataDirectory() string {
+func (d *Document) DataDirectory() string { return d.DataDirectoryOr("/var/lib/tor") }
+
+// DataDirectoryOr returns the configured DataDirectory, or def when torrc
+// sets none (the instance's defaults torrc decides then).
+func (d *Document) DataDirectoryOr(def string) string {
 	v, _ := d.Get("DataDirectory")
 	if strings.HasPrefix(v, `"`) {
 		v = Unquote(v)
@@ -222,7 +251,7 @@ func (d *Document) DataDirectory() string {
 		v = f[0]
 	}
 	if v == "" {
-		return "/var/lib/tor"
+		return def
 	}
 	return v
 }

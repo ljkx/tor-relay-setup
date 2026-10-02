@@ -240,3 +240,39 @@ func TestTrendSparkline(t *testing.T) {
 		t.Errorf("idle = %q", got)
 	}
 }
+
+func TestConsoleOverload(t *testing.T) {
+	t.Parallel()
+	a := testApp()
+	c := newConsole()
+	a.screen = c
+	c.report, c.loaded = consoleReport(), true
+	t0 := time.Unix(1_000_000, 0)
+	c.record(metrics.Sample{At: t0, Read: 1, Load: metrics.Load{Seen: true}}, nil)
+	rows := strip(kv(a.theme, c.overloadRows(a, 60)))
+	if !strings.Contains(rows, "no signals") || len(c.overloadWarnings()) != 0 {
+		t.Fatalf("quiet relay: %q", rows)
+	}
+	c.record(metrics.Sample{At: t0.Add(2 * time.Second), Read: 2, Load: metrics.Load{Seen: true, TCPExhaustion: 3}}, nil)
+	rows = strip(kv(a.theme, c.overloadRows(a, 80)))
+	if !strings.Contains(rows, "3 connections failed because no local TCP port was free") {
+		t.Errorf("rows = %q", rows)
+	}
+	if w := c.overloadWarnings(); len(w) != 1 || !strings.Contains(w[0], "3 connections failed") {
+		t.Errorf("warnings = %q", w)
+	}
+	v := strip(c.view(a))
+	if !strings.Contains(v, "Needs attention") {
+		t.Errorf("overload not in the attention panel:\n%s", v)
+	}
+
+	// Relay Search's mark comes from Tor Metrics.
+	c.overload = metrics.Overload{}
+	c.dir = &onionoo.Relay{Running: true, OverloadGeneral: time.Now().Add(-time.Hour)}
+	if rows := strip(kv(a.theme, c.overloadRows(a, 80))); !strings.Contains(rows, "Relay Search") {
+		t.Errorf("Relay Search mark missing: %q", rows)
+	}
+	if w := c.overloadWarnings(); len(w) != 1 || !strings.Contains(w[0], "overload-general") {
+		t.Errorf("warnings = %q", w)
+	}
+}

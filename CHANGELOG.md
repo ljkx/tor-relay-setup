@@ -2,6 +2,71 @@
 
 All notable changes to this project are documented here.
 
+## v3.2.0 - 2026-10-02
+
+Version 3.2 is for operators of many relays, and of every kind of relay: several relays per server, fleets with a shared dashboard, alerts, bridges, exit tools, and offline identity keys.
+
+**Upgrade:** `sudo tor-relay-setup self-update`. Nothing needs migrating.
+
+**How this release was tested:**
+- CI installs a real relay unattended on a fresh Ubuntu 24.04 VM, adds a second relay on the same server, and checks `status --all`, `fleet-probe`, Prometheus output, an alert for a stopped relay, the hardened alert unit, and uninstall.
+- Every generated torrc layout (bridges, exit policies, the exit notice, OfflineMasterKey) is checked with a real tor 0.4.9 `--verify-config`.
+- obfs4 and WebTunnel bridges ran locally with the real transports, and the offline-key cycle ran with real tor.
+- **Not yet tested on a real server:**
+  - an obfs4 port below 1024 under systemd and AppArmor;
+  - certbot issuance;
+  - WebTunnel end to end through Tor Browser;
+  - tor picking up a renewed signing key on reload;
+  - fleet runs against real hosts.
+
+  Please report what you find.
+
+### Added
+
+- **Several relays per server.** Each extra relay is a Debian tor instance (`tor-instance-create`, `tor@NAME`).
+  - Set it up with `relay.instance` / `--instance`, or with the console's new **Add a relay** (`n`).
+  - The tool chooses free ORPorts and MetricsPorts (9036 upwards) and installs the server's family key; a second family on one server is refused.
+  - It warns above the directory authorities' 8 relays per IPv4 address.
+  - The console gains a relay switcher (`[` `]`, `1`–`9`) and an all-relays health line. `status --all` reports every relay; its JSON is an array.
+- **Kernel tuning** (`system.tuning`, offered above about 100 Mbit/s): a wider ephemeral port range, a larger conntrack table, and a `LimitNOFILE` check, each with its reason in the written file.
+- **Fleets:**
+  - **Inventory:** `fleet.toml` names a base config, a nickname template (`MyRelay{n}`), and one `[[host]]` per relay with per-host overrides. Everything is validated before connecting.
+  - **Apply:** `apply --inventory` runs the family host first, then `--parallel N` servers at a time, over shared SSH connections.
+  - **Dashboard:** `fleet` probes every relay every 10 seconds and asks Tor Metrics in bulk. It shows totals (relays running, consensus weight share, guard/exit probability, live and 30-day traffic), a sortable and filterable relay table with details, and a "Needs attention" panel (unreachable hosts, relays out of the consensus, missing or mismatched family keys, version drift, lost flags).
+  - **Rolling actions:** `fleet restart|reload|update-tor` works through the relays one at a time, waiting until each is back. `fleet status --format text|json|prometheus` gives the same data without the dashboard.
+  - **New commands:** `tor restart|reload|update` (also with `--instance`), and the plumbing command `fleet-probe`.
+- **Overload detection:** the console shows tor's overload signals and Relay Search's overloaded mark, each with Tor's remedy. The signals are dropped circuit handshakes, out-of-memory, TCP port exhaustion, sockets near the limit, and rate limiting.
+- **Alerts:** `alert run|test|install|uninstall`.
+  - **Notifiers:** ntfy, webhooks (JSON or Slack-compatible), email through `sendmail`, or any command.
+  - **What it reports:** the service stopping, an unreachable ORPort, an unsupported tor, a missing family key, the relay dropping out of the consensus, lost flags, overload, and an accounting budget that will run out early.
+  - **When:** when a problem appears, as a reminder while it lasts, and when it resolves; per relay instance. `alert install` adds a hardened systemd timer.
+- **Monitoring:** `docs/monitoring/` covers the textfile collector, safe MetricsPort scraping, Prometheus alerting rules, and a Grafana dashboard. `status --format prometheus` adds tor's load counters, the accounting budget (read from tor's state file), and Relay Search's overload mark.
+- **Bridges:**
+  - **obfs4:** `obfs4proxy`, or `lyrebird` where available. Ports below 1024 get the capability, the unit drop-in, and AppArmor access they need.
+  - **WebTunnel:** the Tor Project's `webtunnel` package, with a managed nginx site (checked with `nginx -t`) and either existing certificates or certbot after confirmation.
+  - **Sharing:** the console's **Bridge line** view (`i`) shows the line to share and links to the reachability scan and status page. Tor Metrics lookups use only the hashed fingerprint.
+- **Exit tools:**
+  - **Exit policy editor** (`x`, and in the wizard): Tor's built-in reduced policy, web-only, default, or validated custom rules, plus an IPv6 exit toggle.
+  - **Exit notice:** a page served by tor itself on port 80.
+  - **Templates:** abuse-reply templates in `docs/examples/`.
+- **Identity keys:** `keys status|offline|renew` (console `k`).
+  - Signing-certificate expiry is parsed and verified in Go, and `status`, `alert` and the console warn a week ahead.
+  - `keys offline` exports the master key and sets `OfflineMasterKey 1`. The master key is removed only after you confirm the copy's SHA-256.
+  - `keys renew` makes or installs the next signing key.
+- **ContactInfo proofs:** `proof [--all] [--check]` (console `c`) prints the CIISS `ed25519-family-id.txt` file for your website. `--check` verifies the published copy over HTTPS, refusing redirects to another domain and flagging any secret key in the file.
+
+### Changed
+
+- Prometheus series carry a `tor_instance` label (`instance` would clash with Prometheus's own target label).
+- `uninstall` also removes the alert timer.
+- The console's service actions, the new `tor` command, and fleet rollouts share one implementation, which works on any tor instance.
+
+### Security
+
+- The bridge line is never written to `status --json`, so it does not reach monitoring systems or fleet probes.
+- Fleet runs keep ssh host-key checking untouched, quote every remote argument, and never print family keys.
+- Alert error messages never include tokens, URL paths or response bodies.
+
 ## v3.1.0 - 2026-10-01
 
 **Upgrade:** run `curl -fsSLO https://raw.githubusercontent.com/ljkx/tor-relay-setup/main/install.sh && sudo bash install.sh` once. From now on, `sudo tor-relay-setup self-update` does it for you.
