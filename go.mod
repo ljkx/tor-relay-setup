@@ -12,7 +12,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/charmbracelet/x/term v0.2.2
 	golang.org/x/crypto v0.57.0
-	golang.org/x/sync v0.23.0
+	golang.org/x/sync v0.24.0
 )
 
 require (
